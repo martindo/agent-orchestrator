@@ -1,0 +1,62 @@
+work_item_types:
+  - id: content-submission
+    name: Content Submission
+    description: User-generated content submitted for moderation
+    custom_fields:
+      - name: content_text
+        type: text
+        required: true
+      - name: content_type
+        type: enum
+        required: true
+        values: [post, comment, message, review, profile]
+      - name: author_id
+        type: string
+        required: true
+      - name: platform
+        type: enum
+        required: false
+        values: [web, mobile, api]
+      - name: language
+        type: string
+        required: false
+        default: "en"
+      - name: media_urls
+        type: text
+        required: false
+      - name: report_count
+        type: integer
+        required: false
+        default: 0
+    artifact_types:
+      - id: sentiment-report
+        name: Sentiment Analysis Report
+        description: Output from sentiment analysis phase
+        file_extensions: [.json]
+      - id: moderation-report
+        name: Moderation Report
+        description: Output from content review phase
+        file_extensions: [.json, .md]
+
+  - id: appeal
+    name: Content Appeal
+    description: Appeal of a previous moderation decision
+    custom_fields:
+      - name: original_decision_id
+        type: string
+        required: true
+      - name: appeal_reason
+        type: text
+        required: true
+      - name: author_id
+        type: string
+        required: true
+      - name: urgency
+        type: enum
+        required: false
+        values: [low, medium, high]
+        default: medium
+    artifact_types:
+      - id: appeal-review
+        name: Appeal Review Report
+        file_extensions: [.json, .md]

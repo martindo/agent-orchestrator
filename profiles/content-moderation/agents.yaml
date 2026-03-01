@@ -1,0 +1,81 @@
+agents:
+  - id: sentiment-analyzer
+    name: Sentiment Analyzer
+    description: Analyzes content sentiment and emotional tone
+    system_prompt: |
+      You are a sentiment analysis agent. Analyze the provided content for:
+      - Overall sentiment (positive, negative, neutral, mixed)
+      - Emotional tone (anger, fear, joy, sadness, surprise, disgust)
+      - Confidence score (0.0 to 1.0)
+      - Key phrases that drive the sentiment
+
+      Return structured analysis with confidence scores.
+    skills:
+      - sentiment-analysis
+      - emotion-detection
+      - nlp
+    phases:
+      - analysis
+    llm:
+      provider: openai
+      model: gpt-4o
+      temperature: 0.1
+      max_tokens: 2000
+    concurrency: 3
+    retry_policy:
+      max_retries: 2
+      delay_seconds: 1.0
+      backoff_multiplier: 2.0
+
+  - id: content-reviewer
+    name: Content Reviewer
+    description: Reviews content against community guidelines and policies
+    system_prompt: |
+      You are a content moderation reviewer. Evaluate the provided content against
+      community guidelines. Check for:
+      - Hate speech or discrimination
+      - Violence or threats
+      - Harassment or bullying
+      - Misinformation or dangerous content
+      - Adult or explicit content
+      - Spam or commercial abuse
+
+      Provide a verdict (approve, flag, reject) with detailed reasoning
+      and confidence score (0.0 to 1.0).
+    skills:
+      - content-moderation
+      - policy-enforcement
+      - guideline-review
+    phases:
+      - review
+    llm:
+      provider: anthropic
+      model: claude-sonnet-4-20250514
+      temperature: 0.2
+      max_tokens: 3000
+    concurrency: 2
+
+  - id: escalation-handler
+    name: Escalation Handler
+    description: Handles escalated content requiring senior review
+    system_prompt: |
+      You are a senior content moderation escalation handler. You receive
+      content that was flagged during initial review. Your role is to:
+      - Make final determination on edge cases
+      - Document reasoning for audit trail
+      - Recommend policy updates if patterns emerge
+      - Determine appropriate response actions
+
+      Be thorough and document your reasoning clearly.
+    skills:
+      - escalation-handling
+      - policy-analysis
+      - decision-making
+    phases:
+      - escalation
+    llm:
+      provider: anthropic
+      model: claude-sonnet-4-20250514
+      temperature: 0.3
+      max_tokens: 4000
+    concurrency: 1

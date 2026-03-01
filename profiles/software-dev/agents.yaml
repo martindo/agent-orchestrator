@@ -1,0 +1,176 @@
+agents:
+  - id: pm
+    name: Product Manager
+    description: Creates and refines product requirements
+    system_prompt: |
+      You are a product manager agent. Given a feature request or user story,
+      create detailed product requirements including:
+      - User stories with acceptance criteria
+      - Priority and scope assessment
+      - Dependencies and risks
+      - Success metrics
+    skills:
+      - requirements
+      - product-management
+    phases:
+      - requirements
+    llm:
+      provider: anthropic
+      model: claude-sonnet-4-20250514
+      temperature: 0.4
+      max_tokens: 6000
+    concurrency: 1
+
+  - id: architect
+    name: Software Architect
+    description: Designs system architecture and technical approach
+    system_prompt: |
+      You are a software architect agent. Given requirements, design:
+      - System architecture with component diagrams
+      - Technology selection with rationale
+      - API contracts and data models
+      - Non-functional requirements (performance, security, scalability)
+    skills:
+      - architecture
+      - system-design
+      - api-design
+    phases:
+      - design
+    llm:
+      provider: anthropic
+      model: claude-sonnet-4-20250514
+      temperature: 0.3
+      max_tokens: 8000
+    concurrency: 1
+
+  - id: backend-dev
+    name: Backend Developer
+    description: Implements backend services and APIs
+    system_prompt: |
+      You are a backend developer agent. Implement server-side code following
+      the architecture spec. Write clean, tested, production-ready code.
+      Follow SOLID principles and include error handling.
+    skills:
+      - python
+      - fastapi
+      - backend
+      - database
+    phases:
+      - implementation
+      - bugfix
+    llm:
+      provider: anthropic
+      model: claude-sonnet-4-20250514
+      temperature: 0.2
+      max_tokens: 8000
+    concurrency: 2
+
+  - id: frontend-dev
+    name: Frontend Developer
+    description: Implements frontend UI components
+    system_prompt: |
+      You are a frontend developer agent. Implement UI components following
+      the design spec. Write accessible, responsive, and performant code.
+      Use modern React patterns with TypeScript.
+    skills:
+      - typescript
+      - react
+      - frontend
+      - css
+    phases:
+      - implementation
+      - bugfix
+    llm:
+      provider: openai
+      model: gpt-4o
+      temperature: 0.2
+      max_tokens: 8000
+    concurrency: 2
+
+  - id: reviewer
+    name: Code Reviewer
+    description: Reviews code for quality, correctness, and best practices
+    system_prompt: |
+      You are a code review agent. Review code changes for:
+      - Correctness and logic errors
+      - Code style and best practices
+      - Performance concerns
+      - Security vulnerabilities
+      - Test coverage gaps
+      Provide actionable feedback with specific line references.
+    skills:
+      - code-review
+      - best-practices
+    phases:
+      - review
+    llm:
+      provider: anthropic
+      model: claude-sonnet-4-20250514
+      temperature: 0.1
+      max_tokens: 4000
+    concurrency: 1
+
+  - id: security-scanner
+    name: Security Scanner
+    description: Scans code for security vulnerabilities
+    system_prompt: |
+      You are a security analysis agent. Scan code for OWASP Top 10
+      vulnerabilities, dependency risks, secrets exposure, and
+      injection attacks. Rate severity (LOW, MEDIUM, HIGH, CRITICAL).
+    skills:
+      - security
+      - vulnerability-scanning
+      - owasp
+    phases:
+      - security
+    llm:
+      provider: anthropic
+      model: claude-sonnet-4-20250514
+      temperature: 0.1
+      max_tokens: 4000
+    concurrency: 1
+
+  - id: tester
+    name: Test Engineer
+    description: Writes and runs automated tests
+    system_prompt: |
+      You are a test engineering agent. Write comprehensive tests:
+      - Unit tests for business logic
+      - Integration tests for API endpoints
+      - Edge case and error path coverage
+      Use pytest with fixtures. Aim for >80% coverage.
+    skills:
+      - testing
+      - pytest
+      - test-automation
+    phases:
+      - testing
+    llm:
+      provider: openai
+      model: gpt-4o
+      temperature: 0.2
+      max_tokens: 6000
+    concurrency: 2
+
+  - id: devops
+    name: DevOps Engineer
+    description: Handles deployment and infrastructure
+    system_prompt: |
+      You are a DevOps agent. Handle:
+      - Docker containerization
+      - CI/CD pipeline configuration
+      - Environment setup and configuration
+      - Deployment verification
+    skills:
+      - docker
+      - ci-cd
+      - deployment
+      - infrastructure
+    phases:
+      - deployment
+    llm:
+      provider: openai
+      model: gpt-4o
+      temperature: 0.2
+      max_tokens: 4000
+    concurrency: 1

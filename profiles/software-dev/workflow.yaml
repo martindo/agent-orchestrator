@@ -1,0 +1,146 @@
+name: Software Development Pipeline
+description: Full SDLC pipeline from requirements through deployment
+
+statuses:
+  - id: backlog
+    name: Backlog
+    is_initial: true
+    transitions_to: [in_progress]
+  - id: in_progress
+    name: In Progress
+    transitions_to: [in_review, blocked]
+  - id: in_review
+    name: In Review
+    transitions_to: [in_progress, approved]
+  - id: blocked
+    name: Blocked
+    transitions_to: [in_progress]
+  - id: approved
+    name: Approved
+    transitions_to: [deploying]
+  - id: deploying
+    name: Deploying
+    transitions_to: [done, failed]
+  - id: done
+    name: Done
+    is_terminal: true
+    transitions_to: []
+  - id: failed
+    name: Failed
+    is_terminal: true
+    transitions_to: []
+
+phases:
+  - id: requirements
+    name: Requirements
+    description: Product requirements and story creation
+    order: 1
+    agents: [pm]
+    parallel: false
+    on_success: design
+    on_failure: requirements
+
+  - id: design
+    name: Architecture Design
+    description: System architecture and technical design
+    order: 2
+    agents: [architect]
+    parallel: false
+    quality_gates:
+      - name: design-completeness
+        description: Architecture covers all requirements
+        conditions:
+          - expression: "components_defined >= 1"
+            description: At least one component defined
+        on_failure: block
+    on_success: implementation
+    on_failure: requirements
+
+  - id: implementation
+    name: Implementation
+    description: Code implementation (frontend + backend in parallel)
+    order: 3
+    agents: [backend-dev, frontend-dev]
+    parallel: true
+    on_success: review
+    on_failure: bugfix
+
+  - id: review
+    name: Code Review
+    description: Peer code review
+    order: 4
+    agents: [reviewer]
+    parallel: false
+    quality_gates:
+      - name: review-pass
+        description: Code review passes without critical issues
+        conditions:
+          - expression: "critical_issues == 0"
+            description: No critical issues found
+        on_failure: block
+    on_success: security
+    on_failure: bugfix
+
+  - id: security
+    name: Security Scan
+    description: Automated security vulnerability scanning
+    order: 5
+    agents: [security-scanner]
+    parallel: false
+    quality_gates:
+      - name: security-pass
+        description: No high/critical vulnerabilities
+        conditions:
+          - expression: "critical_count == 0"
+            description: Zero critical vulnerabilities
+          - expression: "high_count == 0"
+            description: Zero high vulnerabilities
+        on_failure: block
+    on_success: testing
+    on_failure: bugfix
+    skippable: true
+
+  - id: testing
+    name: Testing
+    description: Automated test execution
+    order: 6
+    agents: [tester]
+    parallel: false
+    quality_gates:
+      - name: test-coverage
+        description: Minimum test coverage threshold
+        conditions:
+          - expression: "coverage >= 0.8"
+            description: At least 80% code coverage
+          - expression: "tests_passed == tests_total"
+            description: All tests pass
+        on_failure: block
+    on_success: deployment
+    on_failure: bugfix
+
+  - id: bugfix
+    name: Bug Fix
+    description: Fix issues found in review, security, or testing
+    order: 7
+    agents: [backend-dev, frontend-dev]
+    parallel: true
+    on_success: review
+    on_failure: bugfix
+
+  - id: deployment
+    name: Deployment
+    description: Deploy to target environment
+    order: 8
+    agents: [devops]
+    parallel: false
+    on_success: complete
+    on_failure: bugfix
+
+  - id: complete
+    name: Complete
+    description: Pipeline complete
+    order: 9
+    agents: []
+    is_terminal: true
+    on_success: ""
+    on_failure: ""

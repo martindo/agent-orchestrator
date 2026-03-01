@@ -1,0 +1,84 @@
+name: Content Moderation Pipeline
+description: Multi-phase content moderation with sentiment analysis, review, and escalation
+
+statuses:
+  - id: submitted
+    name: Submitted
+    is_initial: true
+    transitions_to: [analyzing]
+  - id: analyzing
+    name: Analyzing
+    transitions_to: [in_review, auto_approved]
+  - id: in_review
+    name: In Review
+    transitions_to: [approved, rejected, escalated]
+  - id: escalated
+    name: Escalated
+    transitions_to: [approved, rejected]
+  - id: approved
+    name: Approved
+    is_terminal: true
+    transitions_to: []
+  - id: rejected
+    name: Rejected
+    is_terminal: true
+    transitions_to: []
+  - id: auto_approved
+    name: Auto-Approved
+    is_terminal: true
+    transitions_to: []
+
+phases:
+  - id: analysis
+    name: Sentiment Analysis
+    description: Automated sentiment and tone analysis
+    order: 1
+    agents: [sentiment-analyzer]
+    parallel: false
+    quality_gates:
+      - name: confidence-gate
+        description: Ensure analysis confidence meets threshold
+        conditions:
+          - expression: "confidence >= 0.5"
+            description: Minimum confidence for reliable analysis
+        on_failure: warn
+    on_success: review
+    on_failure: review
+    skippable: false
+
+  - id: review
+    name: Content Review
+    description: Human-in-the-loop content policy review
+    order: 2
+    agents: [content-reviewer]
+    parallel: false
+    quality_gates:
+      - name: review-completeness
+        description: Ensure review covers all policy areas
+        conditions:
+          - expression: "categories_checked >= 3"
+            description: Minimum policy categories reviewed
+        on_failure: block
+    on_success: done
+    on_failure: escalation
+    skippable: false
+
+  - id: escalation
+    name: Escalation Review
+    description: Senior review for flagged or ambiguous content
+    order: 3
+    agents: [escalation-handler]
+    parallel: false
+    on_success: done
+    on_failure: done
+    skippable: false
+    requires_human: true
+
+  - id: done
+    name: Complete
+    description: Content moderation complete
+    order: 4
+    agents: []
+    is_terminal: true
+    on_success: ""
+    on_failure: ""

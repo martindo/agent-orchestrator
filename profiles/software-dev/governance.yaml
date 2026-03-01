@@ -1,0 +1,78 @@
+delegated_authority:
+  auto_approve_threshold: 0.8
+  review_threshold: 0.5
+  abort_threshold: 0.2
+  work_type_overrides:
+    security:
+      auto_approve_threshold: 0.95
+      review_threshold: 0.7
+    deployment:
+      auto_approve_threshold: 0.9
+      review_threshold: 0.6
+
+policies:
+  - id: auto-approve-high-confidence
+    name: Auto-Approve High Confidence
+    description: Auto-approve work with high confidence and no failures
+    scope: global
+    action: allow
+    conditions:
+      - "confidence >= 0.9"
+      - "failure_count == 0"
+    priority: 100
+    enabled: true
+    tags: [auto-approve]
+
+  - id: review-low-confidence
+    name: Queue Low Confidence for Review
+    description: Queue work with low confidence for human review
+    scope: global
+    action: review
+    conditions:
+      - "confidence < 0.5"
+    priority: 90
+    enabled: true
+    tags: [review-queue]
+
+  - id: security-escalation
+    name: Security Finding Escalation
+    description: Escalate HIGH/CRITICAL security findings
+    scope: global
+    action: escalate
+    conditions:
+      - "finding_severity in ['HIGH', 'CRITICAL']"
+    priority: 200
+    enabled: true
+    tags: [security, escalation]
+
+  - id: repeated-failure-escalate
+    name: Repeated Failure Auto-Escalate
+    description: Escalate after 3+ failures on same work item
+    scope: global
+    action: escalate
+    conditions:
+      - "failure_count >= 3"
+    priority: 150
+    enabled: true
+    tags: [escalation, repeated-failure]
+
+  - id: critical-abort
+    name: Critical Risk Abort
+    description: Abort processing for critical risk items
+    scope: global
+    action: deny
+    conditions:
+      - "risk_level == 'critical'"
+    priority: 300
+    enabled: true
+    tags: [abort, critical]
+
+  - id: audit-all
+    name: Audit All Decisions
+    description: Log all governance decisions for audit trail
+    scope: global
+    action: allow
+    conditions: []
+    priority: 1
+    enabled: true
+    tags: [audit, logging]

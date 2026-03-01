@@ -1,0 +1,69 @@
+delegated_authority:
+  auto_approve_threshold: 0.9
+  review_threshold: 0.5
+  abort_threshold: 0.1
+  work_type_overrides:
+    hate_speech:
+      auto_approve_threshold: 0.99
+      review_threshold: 0.7
+    violence:
+      auto_approve_threshold: 0.95
+      review_threshold: 0.6
+
+policies:
+  - id: auto-approve-safe
+    name: Auto-Approve Safe Content
+    description: Automatically approve content with high confidence safe rating
+    scope: global
+    action: allow
+    conditions:
+      - "confidence >= 0.9"
+      - "severity == 'none'"
+    priority: 100
+    enabled: true
+    tags: [auto-approve, safe-content]
+
+  - id: flag-low-confidence
+    name: Flag Low Confidence
+    description: Queue for human review when confidence is below threshold
+    scope: global
+    action: review
+    conditions:
+      - "confidence < 0.5"
+    priority: 90
+    enabled: true
+    tags: [review-queue, low-confidence]
+
+  - id: escalate-hate-speech
+    name: Escalate Hate Speech
+    description: Immediately escalate detected hate speech
+    scope: global
+    action: escalate
+    conditions:
+      - "category == 'hate_speech'"
+      - "confidence >= 0.6"
+    priority: 200
+    enabled: true
+    tags: [escalation, hate-speech]
+
+  - id: reject-high-severity
+    name: Reject High Severity
+    description: Auto-reject content with confirmed high severity violations
+    scope: global
+    action: deny
+    conditions:
+      - "severity == 'critical'"
+      - "confidence >= 0.95"
+    priority: 300
+    enabled: true
+    tags: [auto-reject, critical]
+
+  - id: audit-all
+    name: Audit All Decisions
+    description: Log all moderation decisions for audit trail
+    scope: global
+    action: allow
+    conditions: []
+    priority: 1
+    enabled: true
+    tags: [audit, logging]

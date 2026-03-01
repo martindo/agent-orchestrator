@@ -1,0 +1,83 @@
+work_item_types:
+  - id: user-story
+    name: User Story
+    description: A user story with acceptance criteria for implementation
+    custom_fields:
+      - name: title
+        type: string
+        required: true
+      - name: description
+        type: text
+        required: true
+      - name: acceptance_criteria
+        type: text
+        required: false
+      - name: priority
+        type: enum
+        required: true
+        values: [low, medium, high, critical]
+      - name: story_points
+        type: integer
+        required: false
+        default: 0
+      - name: requires_backend
+        type: boolean
+        required: false
+        default: true
+      - name: requires_frontend
+        type: boolean
+        required: false
+        default: true
+      - name: tech_stack
+        type: text
+        required: false
+    artifact_types:
+      - id: prd
+        name: Product Requirements Document
+        file_extensions: [.md, .yaml]
+      - id: architecture
+        name: Architecture Document
+        file_extensions: [.md, .yaml]
+      - id: source-code
+        name: Source Code
+        file_extensions: [.py, .ts, .tsx, .js, .jsx]
+      - id: test-code
+        name: Test Code
+        file_extensions: [.py, .ts]
+      - id: docker-config
+        name: Docker Configuration
+        file_extensions: [.dockerfile, .yaml, .yml]
+
+  - id: bug-report
+    name: Bug Report
+    description: A bug report with reproduction steps
+    custom_fields:
+      - name: title
+        type: string
+        required: true
+      - name: description
+        type: text
+        required: true
+      - name: steps_to_reproduce
+        type: text
+        required: true
+      - name: expected_behavior
+        type: text
+        required: true
+      - name: actual_behavior
+        type: text
+        required: true
+      - name: severity
+        type: enum
+        required: true
+        values: [low, medium, high, critical]
+      - name: affected_component
+        type: string
+        required: false
+    artifact_types:
+      - id: fix-code
+        name: Bug Fix Code
+        file_extensions: [.py, .ts, .tsx]
+      - id: test-code
+        name: Regression Test
+        file_extensions: [.py, .ts]

@@ -1,0 +1,36 @@
+# =============================================================================
+# Agent Orchestrator — Docker Compose
+# =============================================================================
+# Usage:
+#   docker compose up -d          # start database
+#   docker compose down           # stop database (data persists in volume)
+#   docker compose down -v        # stop and DELETE all data
+#   docker compose logs db        # view database logs
+#   docker compose exec db psql -U orchestrator -d agent_orchestrator
+#                                 # open psql shell
+# =============================================================================
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: agent-orchestrator-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-orchestrator}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-agent_orchestrator}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orchestrator} -d ${POSTGRES_DB:-agent_orchestrator}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  pgdata:
+    driver: local
