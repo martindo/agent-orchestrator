@@ -2,15 +2,38 @@
 # Agent Orchestrator — Docker Compose
 # =============================================================================
 # Usage:
-#   docker compose up -d          # start database
-#   docker compose down           # stop database (data persists in volume)
+#   docker compose up -d          # start all services
+#   docker compose down           # stop services (data persists in volumes)
 #   docker compose down -v        # stop and DELETE all data
+#   docker compose logs api       # view orchestrator logs
 #   docker compose logs db        # view database logs
 #   docker compose exec db psql -U orchestrator -d agent_orchestrator
 #                                 # open psql shell
+#
+# First-time workspace setup:
+#   docker compose run --rm api init /workspace --template content-moderation
+#
+# API docs: http://localhost:8000/docs
 # =============================================================================
 
 services:
+  api:
+    build: .
+    container_name: agent-orchestrator-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./workspace:/workspace
+    environment:
+      - AGENT_ORCH_OPENAI_API_KEY=${AGENT_ORCH_OPENAI_API_KEY:-}
+      - AGENT_ORCH_ANTHROPIC_API_KEY=${AGENT_ORCH_ANTHROPIC_API_KEY:-}
+      - AGENT_ORCH_GOOGLE_API_KEY=${AGENT_ORCH_GOOGLE_API_KEY:-}
+      - AGENT_ORCH_GROK_API_KEY=${AGENT_ORCH_GROK_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+
   db:
     image: postgres:16-alpine
     container_name: agent-orchestrator-db
