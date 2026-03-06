@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 from enum import Enum
 from pathlib import Path
@@ -231,8 +232,10 @@ class OrchestrationEngine:
                 )
 
         # Ollama (no API key, uses endpoint)
-        ollama_endpoint = settings.llm_endpoints.get(
-            "ollama", "http://localhost:11434",
+        ollama_endpoint = (
+            os.environ.get("OLLAMA_ENDPOINT")
+            or settings.llm_endpoints.get("ollama")
+            or "http://localhost:11434"
         )
         try:
             from agent_orchestrator.adapters.providers.ollama_provider import (

@@ -30,9 +30,28 @@ services:
       - AGENT_ORCH_ANTHROPIC_API_KEY=${AGENT_ORCH_ANTHROPIC_API_KEY:-}
       - AGENT_ORCH_GOOGLE_API_KEY=${AGENT_ORCH_GOOGLE_API_KEY:-}
       - AGENT_ORCH_GROK_API_KEY=${AGENT_ORCH_GROK_API_KEY:-}
+      - OLLAMA_ENDPOINT=http://ollama:11434
     depends_on:
       db:
         condition: service_healthy
+      ollama:
+        condition: service_healthy
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: agent-orchestrator-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 5 && ollama pull llama3.1:8b && wait"]
 
   db:
     image: postgres:16-alpine
@@ -56,4 +75,6 @@ services:
 
 volumes:
   pgdata:
+    driver: local
+  ollama_data:
     driver: local
