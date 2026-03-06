@@ -1,6 +1,6 @@
-# CoderSwarm Coding Guide
+# Python Coding Guide
 
-This guide defines coding standards and rules to follow when writing code. Following these rules reduces bugs, improves maintainability, and minimizes issues found in code reviews.
+Coding standards for Python code. Following these rules reduces bugs, improves maintainability, and minimizes issues found in code reviews.
 
 ---
 
@@ -161,17 +161,16 @@ except Exception as e:
 ### 2.4 Use Custom Exceptions for Domain Errors
 
 ```python
-# Define in a central exceptions module
-class CoderSwarmError(Exception):
-    """Base exception for all CoderSwarm errors."""
+class OrchestratorError(Exception):
+    """Base exception for all orchestrator errors."""
     pass
 
-class ConfigurationError(CoderSwarmError):
+class ConfigurationError(OrchestratorError):
     """Invalid or missing configuration."""
     pass
 
-class DispatchError(CoderSwarmError):
-    """Failed to dispatch work to agent."""
+class WorkflowError(OrchestratorError):
+    """Phase graph or pipeline errors."""
     pass
 ```
 
@@ -334,12 +333,12 @@ app/
   utils.py  # 500 lines of mixed utilities
   helpers.py  # More utilities
 
-# GOOD: Separate packages
-coderswarm-packages/
-  coderswarm_core/  # Shared utilities
-  coderswarm_scaling/  # Scaling infrastructure
-app/
-  # Application code only
+# GOOD: Separate packages by concern
+src/
+  agent_orchestrator/
+    core/         # Engine, queue, pipeline
+    adapters/     # LLM providers, webhooks
+    governance/   # Policies, audit
 ```
 
 ### 6.2 Avoid Circular Imports
@@ -467,11 +466,7 @@ def get_user(user_id: str):
 
 # GOOD: Consistent return type
 def get_user(user_id: str) -> User:
-    """Get user by ID.
-
-    Raises:
-        UserNotFoundError: If user doesn't exist
-    """
+    """Raises UserNotFoundError if user doesn't exist."""
     if user_id in cache:
         return cache[user_id]
     raise UserNotFoundError(user_id)
@@ -516,14 +511,11 @@ Priority for test coverage:
 
 ```python
 @pytest.fixture
-def coordinator():
-    """Fresh coordinator for each test."""
-    ScalingCoordinator.reset_instance()
-    coord = get_scaling_coordinator()
-    coord.configure(enabled=True)
-    yield coord
-    coord.shutdown()
-    ScalingCoordinator.reset_instance()
+def engine(tmp_path):
+    """Fresh engine for each test."""
+    config = create_test_config(tmp_path)
+    engine = OrchestrationEngine(config)
+    yield engine
 ```
 
 ### 9.3 Test Error Conditions
@@ -550,8 +542,7 @@ def dispatch_work(
     agent_type: AgentType,
     priority: int = 0,
 ) -> DispatchResult:
-    """
-    Dispatch work to an agent for processing.
+    """Dispatch work to an agent for processing.
 
     Args:
         story_id: Unique identifier for the story
@@ -564,10 +555,6 @@ def dispatch_work(
     Raises:
         DispatchError: If no agents available
         ValueError: If story_id is empty
-
-    Example:
-        result = dispatch_work("US-123", AgentType.REVIEWER)
-        print(f"Assigned to {result.agent_id}")
     """
 ```
 
@@ -575,8 +562,7 @@ def dispatch_work(
 
 ```python
 def update_state(self, key: str, value: Any) -> None:
-    """
-    Update shared state.
+    """Update shared state.
 
     Thread-safe: Uses internal lock.
     Side effects: Notifies all state observers.
@@ -587,7 +573,7 @@ def update_state(self, key: str, value: Any) -> None:
 
 ## 11. Performance
 
-### 11.1 Avoid Blocking in Async/Generator Contexts
+### 11.1 Avoid Blocking in Async Contexts
 
 ```python
 # BAD: Blocks the event loop
@@ -653,7 +639,69 @@ def execute_query(user_input: str):
 
 ---
 
-## 13. Checklist Before Submitting Code
+## 13. Single Source of Truth (State Management)
+
+### 13.1 Never Have Multiple State Copies That Need Syncing
+
+```python
+# BAD: Multiple state objects that need syncing
+class ModuleA:
+    _state: dict = {}
+
+class ModuleB:
+    _state: dict = {}  # Needs to stay in sync with ModuleA!
+
+# GOOD: Single shared state object
+class StateManager:
+    """Single source of truth for all state."""
+    _state: dict = {}
+
+    @classmethod
+    def get_state(cls) -> dict:
+        return cls._state
+```
+
+### 13.2 Pass State by Reference, Never Copy Unless Necessary
+
+```python
+# BAD: Copying state loses updates from other components
+def update_state(self, state: dict):
+    self._state = state.copy()  # Copy loses connection to original!
+
+# GOOD: Use the passed state directly
+def update_state(self, state: dict):
+    self._state = state  # Same object reference
+```
+
+### 13.3 Document Which Component Owns the State
+
+```python
+class Orchestrator:
+    """Owns the workflow state dict.
+
+    State Ownership:
+    - Orchestrator: Creates and owns the state dict
+    - EventHandler: References state via update_state_reference()
+    - CallbackHandler: References state via update_state()
+
+    All components share ONE dict instance.
+    """
+    def __init__(self):
+        self.state = {}  # THE source of truth
+```
+
+### 13.4 Common State Sync Anti-Patterns
+
+| Anti-Pattern | Problem | Fix |
+|--------------|---------|-----|
+| Module-level `_state = {}` in multiple modules | Updates invisible to others | Single shared state manager |
+| `self._state = state.copy()` | Loses connection to original | `self._state = state` (reference) |
+| Caching old state and merging back | Overwrites newer updates | Don't cache, use shared reference |
+| Polling to detect changes | Slow, can miss updates | Use callbacks/events or shared state |
+
+---
+
+## Checklist Before Submitting Code
 
 - [ ] All functions have type hints
 - [ ] No print() statements (use logger)
@@ -665,136 +713,6 @@ def execute_query(user_input: str):
 - [ ] Critical paths have tests
 - [ ] Public APIs have docstrings
 - [ ] No circular imports
-
----
-
-## 14. Single Source of Truth (State Management)
-
-### 14.1 Never Have Multiple State Copies That Need Syncing
-
-Multiple state objects that need to stay synchronized is a major source of bugs. When state diverges, systems break in subtle, hard-to-debug ways.
-
-```python
-# BAD: Multiple state objects that need syncing
-class ModuleA:
-    _state: dict = {}  # Module A's state
-
-class ModuleB:
-    _state: dict = {}  # Module B's state - needs to stay in sync!
-
-class ModuleC:
-    def __init__(self):
-        self._state = {}  # Yet another copy!
-
-# Problem: When ModuleA updates _state, ModuleB and ModuleC don't see it
-# Result: Bugfix tracking added in A, but B thinks there are no bugfixes
-```
-
-```python
-# GOOD: Single shared state object
-class StateManager:
-    """Single source of truth for all state."""
-    _instance = None
-    _state: dict = {}
-
-    @classmethod
-    def get_state(cls) -> dict:
-        return cls._state
-
-# All modules use the same state
-state = StateManager.get_state()
-```
-
-### 14.2 Pass State by Reference, Never Copy Unless Necessary
-
-```python
-# BAD: Copying state loses updates from other components
-def update_state(self, state: dict):
-    self._state = state.copy()  # Copy loses connection to original!
-
-# Later...
-original_state["new_key"] = "value"  # This change is NOT visible in self._state!
-
-# BAD: Caching and merging creates stale data
-def update_state(self, state: dict):
-    cached = self._state.copy()  # Save old
-    self._state = state
-    self._state.update(cached)  # Old overwrites new!
-
-# GOOD: Use the passed state directly
-def update_state(self, state: dict):
-    self._state = state  # Same object reference
-```
-
-### 14.3 Document Which Component Owns the State
-
-```python
-# GOOD: Clear ownership documented
-class Orchestrator:
-    """
-    Owns the workflow state dict.
-
-    State Ownership:
-    - Orchestrator: Creates and owns the state dict
-    - EventHandler: References state via update_state_reference()
-    - CallbackHandler: References state via update_state()
-
-    All components share ONE dict instance. Updates are immediately
-    visible to all components.
-    """
-    def __init__(self):
-        self.state = {}  # THE source of truth
-```
-
-### 14.4 If Sync Is Unavoidable, Make It Explicit and Atomic
-
-```python
-# If you must have derived state, make sync explicit
-class DerivedCache:
-    """
-    Derived cache that must be explicitly refreshed.
-
-    WARNING: This is a cache, not a source of truth.
-    Call refresh() before reading if source may have changed.
-    """
-    def __init__(self, source: StateManager):
-        self._source = source
-        self._cache = {}
-
-    def refresh(self):
-        """Explicitly sync cache from source."""
-        with self._lock:
-            self._cache = self._compute_derived(self._source.get_state())
-
-    def get(self, key: str):
-        # Consider if refresh is needed
-        return self._cache.get(key)
-```
-
-### 14.5 Common State Sync Anti-Patterns
-
-| Anti-Pattern | Problem | Fix |
-|--------------|---------|-----|
-| Module-level `_state = {}` in multiple modules | Updates in one module invisible to others | Use single shared state manager |
-| `self._state = state.copy()` | Loses connection to original | `self._state = state` (reference) |
-| Caching old state and merging back | Overwrites newer updates | Don't cache, use shared reference |
-| Polling to detect changes | Slow, can miss updates | Use callbacks/events or shared state |
-| Different state dicts for "performance" | Eventually diverge | Profile first, optimize only if needed |
-
-### 14.6 Real Example: The Bug We Fixed
-
-```python
-# THE BUG: OrchestratorCallbackHandler was caching pipeline state
-def update_state(self, state: dict):
-    cached_pipeline = self._state.get("story_pipeline", {}).copy()  # Cached!
-    self._state = state
-    # Merged cached (stale) over new state - lost event handler's updates!
-    self._state["story_pipeline"] = {**state.get("story_pipeline", {}), **cached_pipeline}
-
-# THE FIX: Just use the passed state
-def update_state(self, state: dict):
-    self._state = state  # Event handler's updates are preserved
-```
 
 ---
 
