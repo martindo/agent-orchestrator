@@ -17,4 +17,4 @@ EXPOSE 8000
 
 # Default: serve a workspace mounted at /workspace
 ENTRYPOINT ["agent-orchestrator"]
-CMD ["serve", "/workspace", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["serve", "--workspace", "/workspace", "--host", "0.0.0.0", "--port", "8000"]
