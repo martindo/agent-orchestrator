@@ -30,7 +30,7 @@ from agent_orchestrator.configuration.loader import (
     _write_config_file,
     _write_yaml,
 )
-from agent_orchestrator.configuration.models import AgentDefinition
+from agent_orchestrator.configuration.models import AgentDefinition, LLMConfig
 from agent_orchestrator.exceptions import AgentError, ConfigurationError
 from agent_orchestrator.persistence.config_history import ConfigHistory
 
@@ -159,6 +159,11 @@ class AgentManager:
                 raise AgentError(msg)
 
             try:
+                # Merge partial llm updates with existing LLMConfig
+                if "llm" in updates and isinstance(updates["llm"], dict):
+                    merged_llm = existing.llm.model_dump()
+                    merged_llm.update(updates["llm"])
+                    updates["llm"] = LLMConfig(**merged_llm)
                 updated = existing.model_copy(update=updates)
             except (PydanticValidationError, ValueError) as e:
                 msg = f"Invalid update for agent '{agent_id}': {e}"

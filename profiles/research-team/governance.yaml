@@ -1,0 +1,37 @@
+policies:
+  - id: iteration-limit
+    name: Search Iteration Limit
+    description: Prevents excessive search loops by limiting iterations
+    rule:
+      expression: "search_iteration_count <= 3"
+    action: review
+    message: "Search iteration limit exceeded (max 3). Manual review required to continue."
+
+  - id: citation-required
+    name: Citation Requirement
+    description: All findings must have at least one supporting citation
+    rule:
+      expression: "all_findings_have_citations == true"
+    action: review
+    message: "One or more findings lack citations. Review required before report generation."
+
+  - id: credibility-threshold
+    name: Source Credibility Threshold
+    description: Flag sources with low credibility scores
+    rule:
+      expression: "source_credibility >= 0.3"
+    action: warn
+    message: "Source credibility below 0.3 threshold. Findings from this source should be corroborated."
+
+  - id: confidence-threshold
+    name: Finding Confidence Threshold
+    description: Flag findings with low confidence scores for review
+    rule:
+      expression: "finding_confidence >= 0.4"
+    action: review
+    message: "Finding confidence below 0.4 threshold. Additional verification recommended."
+
+delegated_authority:
+  auto_approve_threshold: 0.8
+  review_threshold: 0.4
+  abort_threshold: 0.1

@@ -46,11 +46,20 @@ class FieldType(str, Enum):
     BOOLEAN = "boolean"
 
 
+class DeploymentMode(str, Enum):
+    """Deployment profile controlling which platform features are active."""
+
+    LITE = "lite"             # single-process, file/SQLite, zero external deps
+    STANDARD = "standard"     # API + workers, PostgreSQL
+    ENTERPRISE = "enterprise" # + auth, quotas, multi-tenant
+
+
 class PersistenceBackend(str, Enum):
     """Supported persistence backends."""
 
     FILE = "file"
     SQLITE = "sqlite"
+    POSTGRESQL = "postgresql"
 
 
 # ---- System Settings (workspace-level, shared across profiles) ----
@@ -75,6 +84,16 @@ class SettingsConfig(BaseModel):
     )
     log_level: str = DEFAULT_LOG_LEVEL
     persistence_backend: str = DEFAULT_PERSISTENCE_BACKEND
+    deployment_mode: str = "lite"
+
+    @field_validator("deployment_mode")
+    @classmethod
+    def _validate_deployment_mode(cls, v: str) -> str:
+        valid = {m.value for m in DeploymentMode}
+        if v not in valid:
+            msg = f"Invalid deployment mode '{v}', must be one of {valid}"
+            raise ValueError(msg)
+        return v
 
     @field_validator("log_level")
     @classmethod
@@ -94,6 +113,23 @@ class SettingsConfig(BaseModel):
             msg = f"Invalid persistence backend '{v}', must be one of {valid}"
             raise ValueError(msg)
         return v
+
+
+# ---- Execution Context ----
+
+
+class ExecutionContext(BaseModel):
+    """Immutable context propagated through every operation in a run."""
+
+    model_config = {"frozen": True}
+
+    app_id: str = Field(default="default")
+    run_id: str = Field(default="")
+    tenant_id: str = Field(default="default")
+    environment: str = Field(default="development")
+    deployment_mode: DeploymentMode = DeploymentMode.LITE
+    profile_name: str = Field(default="")
+    extra: dict[str, str] = Field(default_factory=dict)
 
 
 # ---- Per-Agent LLM Config ----
@@ -380,6 +416,38 @@ class WorkItemTypeConfig(BaseModel):
     artifact_types: list[ArtifactTypeConfig] = Field(default_factory=list)
 
 
+# ---- App Manifest (optional, per-profile) ----
+
+
+class AppManifest(BaseModel):
+    """Optional manifest describing an app built on the platform.
+
+    Placed as ``app.yaml`` in the profile directory. Provides metadata,
+    dependency declarations, and hook registration for domain apps.
+    Profiles without an ``app.yaml`` work exactly as before.
+    """
+
+    model_config = {"frozen": True}
+
+    name: str = ""
+    version: str = "0.0.0"
+    description: str = ""
+    platform_version: str = ""
+    requires: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Dependencies: providers, connectors, etc.",
+    )
+    produces: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Outputs: work_item_types, artifact_types, etc.",
+    )
+    hooks: dict[str, str] = Field(
+        default_factory=dict,
+        description="Phase context hooks: phase_id -> 'module:function'",
+    )
+    author: str = ""
+
+
 # ---- Profile (bundles all domain config) ----
 
 
@@ -398,3 +466,7 @@ class ProfileConfig(BaseModel):
     workflow: WorkflowConfig = Field(default_factory=lambda: WorkflowConfig(name="default"))
     governance: GovernanceConfig = Field(default_factory=GovernanceConfig)
     work_item_types: list[WorkItemTypeConfig] = Field(default_factory=list)
+    manifest: AppManifest | None = Field(
+        default=None,
+        description="Optional app manifest from app.yaml",
+    )

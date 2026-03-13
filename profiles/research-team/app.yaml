@@ -1,0 +1,17 @@
+name: research-team
+version: "0.1.0"
+description: Multi-agent research pipeline with retriable web search and synthesis
+platform_version: "0.1.0"
+requires:
+  providers:
+    - openai
+    - anthropic
+  connectors:
+    - web_search
+produces:
+  work_item_types:
+    - research-query
+  artifact_types:
+    - research-report
+hooks: {}
+author: ""

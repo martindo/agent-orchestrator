@@ -21,6 +21,7 @@ Complete reference for configuring, deploying, and integrating with agent-orches
 8. [Python SDK](#python-sdk)
 9. [Built-in Profile Templates](#built-in-profile-templates)
 10. [Validation Rules](#validation-rules)
+11. [Building Apps](#building-apps)
 
 ---
 
@@ -132,8 +133,11 @@ llm_endpoints:
 # Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
 log_level: "INFO"
 
-# Storage backend: file or sqlite
+# Storage backend: file, sqlite, or postgresql
 persistence_backend: "file"
+
+# Deployment mode: lite, standard, or enterprise
+deployment_mode: "lite"
 ```
 
 #### Environment Variable Fallback
@@ -163,7 +167,8 @@ export AGENT_ORCH_ANTHROPIC_API_KEY=sk-ant-api03-...
 | `api_keys` | dict | `{}` | Map of provider name to API key |
 | `llm_endpoints` | dict | `{}` | Map of provider name to endpoint URL |
 | `log_level` | string | `"INFO"` | One of: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
-| `persistence_backend` | string | `"file"` | One of: `file`, `sqlite` |
+| `persistence_backend` | string | `"file"` | One of: `file`, `sqlite`, `postgresql` |
+| `deployment_mode` | string | `"lite"` | One of: `lite`, `standard`, `enterprise` |
 
 ---
 
@@ -794,10 +799,14 @@ Interactive docs available at `http://localhost:8000/docs` when running `agent-o
 | `GET` | `/health` | Health check |
 | `GET` | `/health/ready` | Readiness probe |
 | `GET` | `/health/live` | Liveness probe |
+| `GET` | `/context` | Current execution context |
 
 ```bash
 curl http://localhost:8000/api/v1/health
 # {"status": "ok", "version": "0.1.0", "timestamp": "2026-02-28T..."}
+
+curl http://localhost:8000/api/v1/context
+# {"app_id": "default", "deployment_mode": "lite", "tenant_id": "default", "environment": "development", "profile_name": "my-profile"}
 ```
 
 ### Execution Control
@@ -862,6 +871,7 @@ curl -X POST http://localhost:8000/api/v1/workitems \
 | `title` | string | *required* | Human-readable title |
 | `data` | object | `{}` | Payload data passed to agents |
 | `priority` | int | `5` | Priority (0 = highest, 10 = lowest) |
+| `app_id` | string | `"default"` | Application namespace for multi-app scoping |
 
 **Response:**
 
@@ -871,7 +881,9 @@ curl -X POST http://localhost:8000/api/v1/workitems \
   "type_id": "content-submission",
   "title": "Review user post",
   "status": "pending",
-  "current_phase": ""
+  "current_phase": "",
+  "app_id": "default",
+  "run_id": "a1b2c3d4e5f6..."
 }
 ```
 
@@ -992,6 +1004,8 @@ curl http://localhost:8000/api/v1/metrics
 | `work_id` | string | `null` | Filter by work item ID |
 | `record_type` | string | `null` | Filter by type (see below) |
 | `limit` | int | `100` | Max records to return |
+| `app_id` | string | `null` | Filter by application ID |
+| `run_id` | string | `null` | Filter by run ID |
 
 **Record types:** `decision`, `state_change`, `escalation`, `error`, `config_change`, `system_event`
 
@@ -1293,3 +1307,100 @@ Run `agent-orchestrator validate` or `POST /config/validate` to check your confi
 - `enum` fields must include a `values` list
 
 Errors block startup. Warnings are informational and logged.
+
+---
+
+## Building Apps
+
+Agent-orchestrator is designed to be a platform you build domain-specific apps on top of. This section covers the developer experience tools available.
+
+### Public SDK Imports
+
+All primary types are exported from the top-level package:
+
+```python
+from agent_orchestrator import (
+    OrchestrationEngine, EngineState, WorkItem, WorkItemStatus,
+    EventBus, Event, EventType,
+    ConfigurationManager, ProfileConfig, AgentDefinition,
+    WorkflowConfig, LLMConfig, SettingsConfig,
+    Governor, GovernanceDecision, Resolution, AuditLogger,
+    AppManifest,
+    ExecutionContext, DeploymentMode,
+)
+```
+
+### App Manifest (`app.yaml`)
+
+An optional `app.yaml` in your profile directory declares metadata, dependencies, and hooks:
+
+```yaml
+name: my-app
+version: "1.0.0"
+description: My domain-specific app
+platform_version: "0.1.0"
+requires:
+  providers: [openai, anthropic]
+  connectors: [web_search]
+produces:
+  work_item_types: [research-query]
+  artifact_types: [research-report]
+hooks:
+  process: "myapp.helpers.hooks:process_hook"
+author: "Your Name"
+```
+
+The manifest is loaded automatically and attached to `ProfileConfig.manifest`. Profiles without `app.yaml` work exactly as before.
+
+### Test Helpers
+
+Install with `pip install agent-orchestrator[testing]` and use factory functions:
+
+```python
+from agent_orchestrator.testing import (
+    make_work_item, make_agent, make_profile, make_workspace, mock_llm_fn,
+)
+
+def test_my_workflow():
+    item = make_work_item(title="Review PR #42")
+    agent = make_agent(id="reviewer", phases=["review"])
+    profile = make_profile(agents=[agent])
+    assert len(profile.agents) == 1
+
+def test_with_workspace(tmp_path):
+    workspace = make_workspace(tmp_path)
+    # workspace is a real directory with settings.yaml and a profile
+```
+
+### Scaffolding with `new-app`
+
+Generate a complete app skeleton:
+
+```bash
+agent-orchestrator new-app my-app --workspace workspace
+agent-orchestrator new-app my-app --workspace workspace --with-hooks
+```
+
+This creates:
+```
+profiles/my-app/
+  app.yaml           # manifest
+  agents.yaml        # one starter agent
+  workflow.yaml      # two-phase workflow
+  governance.yaml    # default governance
+  workitems.yaml     # one work item type
+  helpers/           # for domain code
+    __init__.py
+  tests/
+    conftest.py      # imports test helpers
+    test_example.py  # shows the testing pattern
+```
+
+### Extension Points
+
+See [docs/EXTENSION_POINTS.md](docs/EXTENSION_POINTS.md) for detailed documentation on:
+
+1. **Phase context hooks** — inject custom data into phase execution
+2. **Event bus subscriptions** — react to engine events
+3. **Custom LLM providers** — implement `LLMProviderProtocol`
+4. **Connectors & contracts** — register capability providers

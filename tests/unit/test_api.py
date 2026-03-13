@@ -479,6 +479,10 @@ class TestWorkItemEndpointsWired:
         mock_item.title = "Found item"
         mock_item.status.value = "pending"
         mock_item.current_phase = "process"
+        mock_item.data = {}
+        mock_item.results = {}
+        mock_item.app_id = "default"
+        mock_item.run_id = ""
         engine.get_work_item.return_value = mock_item
         client = _make_client_with_engine(engine)
 
@@ -787,3 +791,211 @@ class TestScaleAgentWired:
 
         response = client.post("/api/v1/agents/agent-1/scale?concurrency=5")
         assert response.status_code == 400
+
+
+# ---- Connector Execute Endpoint Tests ----
+
+from agent_orchestrator.connectors.models import (  # noqa: E402
+    CapabilityType,
+    ConnectorCostInfo,
+    ConnectorInvocationResult,
+    ConnectorStatus,
+)
+
+
+def _make_invocation_result(
+    status: ConnectorStatus = ConnectorStatus.SUCCESS,
+    payload: dict | None = None,
+    error_message: str | None = None,
+    capability_type: CapabilityType = CapabilityType.SEARCH,
+    operation: str = "query",
+    cost_info: ConnectorCostInfo | None = None,
+) -> ConnectorInvocationResult:
+    return ConnectorInvocationResult(
+        request_id="req-test-001",
+        connector_id="search-tavily",
+        provider="tavily",
+        capability_type=capability_type,
+        operation=operation,
+        status=status,
+        payload=payload,
+        error_message=error_message,
+        cost_info=cost_info,
+        duration_ms=42.0,
+    )
+
+
+def _make_engine_with_connector_service(result: ConnectorInvocationResult) -> MagicMock:
+    engine = _make_mock_engine()
+    mock_service = MagicMock()
+    mock_service.execute = AsyncMock(return_value=result)
+    engine.connector_service = mock_service
+    return engine
+
+
+class TestConnectorExecuteEndpoint:
+    """Tests for POST /api/v1/connectors/execute."""
+
+    def test_successful_search_execution(self) -> None:
+        payload = {"query": "test query", "results": [{"title": "Result 1", "url": "https://example.com"}]}
+        result = _make_invocation_result(payload=payload)
+        engine = _make_engine_with_connector_service(result)
+        client = _make_client_with_engine(engine)
+
+        response = client.post(
+            "/api/v1/connectors/execute",
+            json={"capability_type": "search", "operation": "query", "parameters": {"q": "test query"}},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["provider"] == "tavily"
+        assert data["capability_type"] == "search"
+        assert data["operation"] == "query"
+        assert data["payload"] == payload
+        assert data["duration_ms"] == 42.0
+
+    def test_passes_all_fields_to_service(self) -> None:
+        result = _make_invocation_result()
+        engine = _make_engine_with_connector_service(result)
+        client = _make_client_with_engine(engine)
+
+        client.post(
+            "/api/v1/connectors/execute",
+            json={
+                "capability_type": "search",
+                "operation": "query",
+                "parameters": {"q": "climate change"},
+                "context": {"run_id": "r1", "workflow_id": "w1"},
+                "preferred_provider": "brave",
+                "timeout_seconds": 10.0,
+            },
+        )
+
+        engine.connector_service.execute.assert_called_once_with(
+            capability_type=CapabilityType.SEARCH,
+            operation="query",
+            parameters={"q": "climate change"},
+            context={"run_id": "r1", "workflow_id": "w1"},
+            preferred_provider="brave",
+            timeout_seconds=10.0,
+        )
+
+    def test_permission_denied_returns_200_with_status(self) -> None:
+        result = _make_invocation_result(
+            status=ConnectorStatus.PERMISSION_DENIED,
+            error_message="Denied by policy: module not allowed",
+        )
+        engine = _make_engine_with_connector_service(result)
+        client = _make_client_with_engine(engine)
+
+        response = client.post(
+            "/api/v1/connectors/execute",
+            json={"capability_type": "search", "operation": "query", "parameters": {}},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "permission_denied"
+        assert data["payload"] is None
+
+    def test_unavailable_provider_returns_200_with_status(self) -> None:
+        result = _make_invocation_result(
+            status=ConnectorStatus.UNAVAILABLE,
+            error_message="No provider available for capability_type=search",
+        )
+        engine = _make_engine_with_connector_service(result)
+        client = _make_client_with_engine(engine)
+
+        response = client.post(
+            "/api/v1/connectors/execute",
+            json={"capability_type": "search", "operation": "query", "parameters": {}},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "unavailable"
+
+    def test_unknown_capability_type_returns_422(self) -> None:
+        result = _make_invocation_result()
+        engine = _make_engine_with_connector_service(result)
+        client = _make_client_with_engine(engine)
+
+        response = client.post(
+            "/api/v1/connectors/execute",
+            json={"capability_type": "not_a_real_type", "operation": "query", "parameters": {}},
+        )
+
+        assert response.status_code == 422
+        assert "not_a_real_type" in response.json()["detail"]
+
+    def test_no_engine_returns_503(self) -> None:
+        app = create_app()
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/v1/connectors/execute",
+            json={"capability_type": "search", "operation": "query", "parameters": {}},
+        )
+
+        assert response.status_code == 503
+
+    def test_no_connector_service_returns_503(self) -> None:
+        engine = _make_mock_engine()
+        engine.connector_service = None
+        client = _make_client_with_engine(engine)
+
+        response = client.post(
+            "/api/v1/connectors/execute",
+            json={"capability_type": "search", "operation": "query", "parameters": {}},
+        )
+
+        assert response.status_code == 503
+
+    def test_cost_info_included_in_response(self) -> None:
+        cost = ConnectorCostInfo(request_cost=0.004, currency="USD", unit_label="search")
+        result = _make_invocation_result(
+            payload={"query": "q", "results": []},
+            cost_info=cost,
+        )
+        engine = _make_engine_with_connector_service(result)
+        client = _make_client_with_engine(engine)
+
+        response = client.post(
+            "/api/v1/connectors/execute",
+            json={"capability_type": "search", "operation": "query", "parameters": {"q": "q"}},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["cost_info"]["request_cost"] == 0.004
+        assert data["cost_info"]["currency"] == "USD"
+        assert data["cost_info"]["unit_label"] == "search"
+
+    def test_empty_context_defaults_to_none(self) -> None:
+        result = _make_invocation_result()
+        engine = _make_engine_with_connector_service(result)
+        client = _make_client_with_engine(engine)
+
+        client.post(
+            "/api/v1/connectors/execute",
+            json={"capability_type": "search", "operation": "query", "parameters": {}},
+        )
+
+        call_kwargs = engine.connector_service.execute.call_args.kwargs
+        assert call_kwargs["context"] is None
+
+    def test_all_capability_types_accepted(self) -> None:
+        valid_types = ["search", "documents", "messaging", "ticketing", "repository"]
+        for cap_type in valid_types:
+            result = _make_invocation_result(capability_type=CapabilityType(cap_type))
+            engine = _make_engine_with_connector_service(result)
+            client = _make_client_with_engine(engine)
+
+            response = client.post(
+                "/api/v1/connectors/execute",
+                json={"capability_type": cap_type, "operation": "test_op", "parameters": {}},
+            )
+
+            assert response.status_code == 200, f"Failed for capability_type={cap_type}"

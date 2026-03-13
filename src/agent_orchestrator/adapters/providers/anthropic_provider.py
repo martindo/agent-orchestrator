@@ -16,6 +16,18 @@ class AnthropicProvider:
     def __init__(self, api_key: str) -> None:
         self._client = AsyncAnthropic(api_key=api_key)
 
+    async def list_models(self) -> list[dict[str, str]]:
+        """List available Anthropic models via the API."""
+        try:
+            response = await self._client.models.list(limit=100)
+            return [
+                {"id": m.id, "name": getattr(m, "display_name", m.id)}
+                for m in response.data
+            ]
+        except Exception:
+            logger.warning("Failed to list Anthropic models via API", exc_info=True)
+            return []
+
     async def complete(
         self,
         messages: list[dict[str, str]],

@@ -1,15 +1,5 @@
 # CLAUDE.md
 
-## Coding Standards (Default: ON)
-
-When writing or modifying code, **always follow the coding guide** for the relevant language:
-
-- **Python** — follow `CODING_GUIDE_PYTHON.md`
-- **TypeScript** — follow `CODING_GUIDE_TS.md`
-- **JavaScript** — follow `CODING_GUIDE_JS.md`
-
-These guides are enforced by default. Only skip them if the user explicitly says to ignore the coding guide.
-
 ## Project Overview
 
 Agent Orchestrator — a generic, domain-agnostic platform for orchestrating multi-agent workflows with built-in governance, auditing, and observability.

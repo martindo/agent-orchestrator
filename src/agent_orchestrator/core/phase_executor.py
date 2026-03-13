@@ -12,7 +12,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from agent_orchestrator.configuration.models import ExecutionContext
 
 from agent_orchestrator.configuration.models import WorkflowPhaseConfig
 from agent_orchestrator.core.agent_executor import AgentExecutor, ExecutionResult
@@ -59,6 +62,7 @@ class PhaseExecutor:
         phase: WorkflowPhaseConfig,
         work_item: WorkItem,
         phase_context: dict[str, Any] | None = None,
+        context: "ExecutionContext | None" = None,
     ) -> PhaseExecutionResult:
         """Execute all agents assigned to a phase.
 
@@ -95,11 +99,11 @@ class PhaseExecutor:
 
         if phase.parallel:
             agent_results = await self._execute_parallel(
-                phase, work_item, phase_context or {},
+                phase, work_item, phase_context or {}, context=context,
             )
         else:
             agent_results = await self._execute_sequential(
-                phase, work_item, phase_context or {},
+                phase, work_item, phase_context or {}, context=context,
             )
 
         success = all(r.success for r in agent_results)
@@ -126,10 +130,11 @@ class PhaseExecutor:
         phase: WorkflowPhaseConfig,
         work_item: WorkItem,
         phase_context: dict[str, Any],
+        context: "ExecutionContext | None" = None,
     ) -> list[ExecutionResult]:
         """Execute agents concurrently."""
         tasks = [
-            self._execute_single_agent(agent_id, phase, work_item, phase_context)
+            self._execute_single_agent(agent_id, phase, work_item, phase_context, context=context)
             for agent_id in phase.agents
         ]
         return await asyncio.gather(*tasks)
@@ -139,12 +144,13 @@ class PhaseExecutor:
         phase: WorkflowPhaseConfig,
         work_item: WorkItem,
         phase_context: dict[str, Any],
+        context: "ExecutionContext | None" = None,
     ) -> list[ExecutionResult]:
         """Execute agents one at a time."""
         results: list[ExecutionResult] = []
         for agent_id in phase.agents:
             result = await self._execute_single_agent(
-                agent_id, phase, work_item, phase_context,
+                agent_id, phase, work_item, phase_context, context=context,
             )
             results.append(result)
             # Stop on failure for sequential execution
@@ -162,6 +168,7 @@ class PhaseExecutor:
         phase: WorkflowPhaseConfig,
         work_item: WorkItem,
         phase_context: dict[str, Any],
+        context: "ExecutionContext | None" = None,
     ) -> ExecutionResult:
         """Acquire an agent instance and execute it."""
         # Try to acquire agent instance with retry

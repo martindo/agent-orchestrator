@@ -46,6 +46,8 @@ class AuditRecord:
     summary: str
     work_id: str = ""
     agent_id: str = ""
+    app_id: str = ""
+    run_id: str = ""
     data: dict[str, Any] = field(default_factory=dict)
     timestamp: str = ""
     prev_hash: str = ""
@@ -99,6 +101,8 @@ class AuditLogger:
         work_id: str = "",
         agent_id: str = "",
         data: dict[str, Any] | None = None,
+        app_id: str = "",
+        run_id: str = "",
     ) -> AuditRecord:
         """Append a record to the audit trail.
 
@@ -109,6 +113,8 @@ class AuditLogger:
             work_id: Related work item ID.
             agent_id: Related agent ID.
             data: Additional data payload.
+            app_id: Application ID for multi-app scoping.
+            run_id: Run ID for execution tracing.
 
         Returns:
             The created AuditRecord.
@@ -122,6 +128,8 @@ class AuditLogger:
                 summary=summary,
                 work_id=work_id,
                 agent_id=agent_id,
+                app_id=app_id,
+                run_id=run_id,
                 data=data or {},
                 prev_hash=self._last_hash,
             )
@@ -160,6 +168,8 @@ class AuditLogger:
         work_id: str | None = None,
         record_type: RecordType | None = None,
         limit: int = 100,
+        app_id: str | None = None,
+        run_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Query audit records.
 
@@ -167,6 +177,8 @@ class AuditLogger:
             work_id: Filter by work item ID.
             record_type: Filter by record type.
             limit: Max records to return.
+            app_id: Filter by application ID.
+            run_id: Filter by run ID.
 
         Returns:
             List of matching records (newest first).
@@ -186,6 +198,10 @@ class AuditLogger:
                         if work_id and record.get("work_id") != work_id:
                             continue
                         if record_type and record.get("record_type") != record_type.value:
+                            continue
+                        if app_id and record.get("app_id") != app_id:
+                            continue
+                        if run_id and record.get("run_id") != run_id:
                             continue
                         records.append(record)
             except (json.JSONDecodeError, OSError) as e:

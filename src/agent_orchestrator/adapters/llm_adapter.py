@@ -93,6 +93,18 @@ class LLMAdapter:
             max_tokens=llm_config.max_tokens,
         )
 
+    async def list_models(self, provider: str) -> list[dict[str, str]]:
+        """List available models for a provider.
+
+        Returns a list of dicts with 'id' and 'name' keys.
+        """
+        prov = self._providers.get(provider)
+        if prov is None:
+            return []
+        if not hasattr(prov, "list_models"):
+            return []
+        return await prov.list_models()
+
     def get_api_key(self, provider: str) -> str | None:
         """Get API key for a provider."""
         return self._api_keys.get(provider)

@@ -1,0 +1,60 @@
+work_item_type: research-run
+
+fields:
+  - name: topic
+    type: text
+    required: true
+    description: The research topic or question to investigate
+
+  - name: depth
+    type: enum
+    required: true
+    default: standard
+    options: [quick, standard, deep, exhaustive]
+    description: Research depth level controlling thoroughness and iteration count
+
+  - name: seed_context
+    type: text
+    required: false
+    description: Prior research notes, background context, or starting references
+
+  - name: constraints
+    type: text
+    required: false
+    description: Constraints on the research scope, sources, or methodology
+
+  - name: max_iterations
+    type: integer
+    required: false
+    default: 3
+    description: Maximum number of search-verify loop iterations
+
+  - name: focus_areas
+    type: text
+    required: false
+    description: Specific aspects or sub-topics to prioritize in the research
+
+artifact_types:
+  - id: search-queries
+    name: Search Queries
+    description: Generated search queries for each research iteration
+    formats: [json]
+    phase: search
+
+  - id: source-analysis
+    name: Source Analysis
+    description: Extracted findings and credibility assessments per source
+    formats: [json]
+    phase: analysis
+
+  - id: verification-report
+    name: Verification Report
+    description: Cross-referenced findings with gap analysis
+    formats: [json, md]
+    phase: verification
+
+  - id: final-report
+    name: Final Report
+    description: Comprehensive research report with citations
+    formats: [md]
+    phase: report

@@ -16,6 +16,21 @@ class OpenAIProvider:
     def __init__(self, api_key: str) -> None:
         self._client = AsyncOpenAI(api_key=api_key)
 
+    async def list_models(self) -> list[dict[str, str]]:
+        """List available OpenAI models via the API."""
+        try:
+            response = await self._client.models.list()
+            models = [
+                {"id": m.id, "name": m.id}
+                for m in response.data
+                if m.id.startswith(("gpt-", "o1", "o3", "o4"))
+            ]
+            models.sort(key=lambda m: m["id"])
+            return models
+        except Exception:
+            logger.warning("Failed to list OpenAI models via API", exc_info=True)
+            return []
+
     async def complete(
         self,
         messages: list[dict[str, str]],

@@ -48,6 +48,8 @@ class PipelineEntry:
     phase_attempts: dict[str, int] = field(default_factory=dict)
     phase_history: list[dict[str, Any]] = field(default_factory=list)
     entered_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    run_id: str = ""
+    app_id: str = "default"
 
 
 class PipelineManager:
@@ -262,6 +264,22 @@ class PipelineManager:
             if entry is not None:
                 entry.locked = False
                 entry.locked_by = None
+
+    def reset_to_phase(self, work_id: str, phase_id: str) -> bool:
+        """Reset a work item to a specific phase.
+
+        Returns False if locked, unknown phase, or not found.
+        """
+        with self._lock:
+            entry = self._entries.get(work_id)
+            valid_phases = set(self._phases.keys())
+            if entry is None or phase_id not in valid_phases or entry.locked:
+                return False
+            entry.current_phase_id = phase_id
+            entry.work_item.current_phase = phase_id
+            entry.work_item.status = WorkItemStatus.IN_PROGRESS
+            entry.locked_by = None
+            return True
 
     def get_entry(self, work_id: str) -> PipelineEntry | None:
         """Get pipeline entry for a work item."""

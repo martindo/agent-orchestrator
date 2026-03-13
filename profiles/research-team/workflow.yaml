@@ -1,0 +1,135 @@
+name: Research Pipeline
+description: Multi-phase research workflow with iterative search refinement
+
+statuses:
+  - id: pending
+    name: Pending
+    is_initial: true
+    transitions_to: [planning]
+  - id: planning
+    name: Planning
+    is_initial: false
+    transitions_to: [searching]
+  - id: searching
+    name: Searching
+    is_initial: false
+    transitions_to: [analyzing]
+  - id: analyzing
+    name: Analyzing
+    is_initial: false
+    transitions_to: [verifying]
+  - id: verifying
+    name: Verifying
+    is_initial: false
+    transitions_to: [searching, synthesizing]
+  - id: synthesizing
+    name: Synthesizing
+    is_initial: false
+    transitions_to: [reporting]
+  - id: reporting
+    name: Reporting
+    is_initial: false
+    transitions_to: [completed]
+  - id: completed
+    name: Completed
+    is_terminal: true
+    transitions_to: []
+  - id: failed
+    name: Failed
+    is_terminal: true
+    transitions_to: []
+
+phases:
+  - id: planning
+    name: Research Planning
+    order: 1
+    agents: [research-manager]
+    parallel: false
+    quality_gates:
+      - name: sub-queries-gate
+        conditions:
+          - expression: "len(sub_queries) >= 1"
+        on_failure: warn
+    on_success: search
+    on_failure: failed
+    skippable: false
+
+  - id: search
+    name: Query Generation
+    order: 2
+    agents: [search-specialist]
+    parallel: false
+    quality_gates:
+      - name: query-count-gate
+        conditions:
+          - expression: "len(queries) >= 1"
+        on_failure: warn
+    on_success: analysis
+    on_failure: analysis
+    skippable: false
+
+  - id: analysis
+    name: Source Analysis
+    order: 3
+    agents: [source-analyst]
+    parallel: true
+    quality_gates:
+      - name: credibility-gate
+        conditions:
+          - expression: "avg_credibility >= 0.3"
+        on_failure: warn
+    on_success: verification
+    on_failure: verification
+    skippable: false
+
+  - id: verification
+    name: Finding Verification
+    order: 4
+    agents: [critic-verifier]
+    parallel: false
+    quality_gates:
+      - name: gap-check-gate
+        conditions:
+          - expression: "has_gaps == false"
+        on_failure: loop
+    on_success: synthesis
+    on_failure: search
+    skippable: false
+
+  - id: synthesis
+    name: Research Synthesis
+    order: 5
+    agents: [research-manager]
+    parallel: false
+    quality_gates:
+      - name: coverage-gate
+        conditions:
+          - expression: "coverage_score >= 0.6"
+        on_failure: warn
+    on_success: report
+    on_failure: report
+    skippable: false
+
+  - id: report
+    name: Report Generation
+    order: 6
+    agents: [report-writer]
+    parallel: false
+    quality_gates:
+      - name: citation-gate
+        conditions:
+          - expression: "all_claims_cited == true"
+        on_failure: warn
+    on_success: complete
+    on_failure: complete
+    skippable: false
+
+  - id: complete
+    name: Completion
+    order: 7
+    agents: []
+    parallel: false
+    is_terminal: true
+    on_success: completed
+    on_failure: completed
+    skippable: false

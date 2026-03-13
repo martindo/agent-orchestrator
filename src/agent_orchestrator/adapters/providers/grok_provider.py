@@ -24,6 +24,17 @@ class GrokProvider:
             base_url=_GROK_BASE_URL,
         )
 
+    async def list_models(self) -> list[dict[str, str]]:
+        """List available Grok models via the xAI API."""
+        try:
+            response = await self._client.models.list()
+            models = [{"id": m.id, "name": m.id} for m in response.data]
+            models.sort(key=lambda m: m["id"])
+            return models
+        except Exception:
+            logger.warning("Failed to list Grok models via API", exc_info=True)
+            return []
+
     async def complete(
         self,
         messages: list[dict[str, str]],

@@ -15,6 +15,8 @@ from agent_orchestrator.api.routes import (
     agents_router,
     audit_router,
     config_router,
+    connectors_router,
+    contracts_router,
     execution_router,
     governance_router,
     health_router,
@@ -57,6 +59,13 @@ def create_app(
     # Wire engine into app state
     app.state.engine = engine
 
+    # Store execution context if engine has one
+    app.state.execution_context = getattr(engine, "context", None) if engine else None
+
+    # Initialize contract registry (always available; domain modules register at startup)
+    from agent_orchestrator.contracts import ContractRegistry
+    app.state.contract_registry = ContractRegistry()
+
     # Wire up AgentManager and ConfigurationManager
     if agent_manager is not None:
         app.state.agent_manager = agent_manager
@@ -77,6 +86,8 @@ def create_app(
     app.include_router(metrics_router, prefix=API_PREFIX, tags=["metrics"])
     app.include_router(audit_router, prefix=API_PREFIX, tags=["audit"])
     app.include_router(config_router, prefix=API_PREFIX, tags=["config"])
+    app.include_router(connectors_router, prefix=API_PREFIX, tags=["connectors"])
+    app.include_router(contracts_router, prefix=API_PREFIX, tags=["contracts"])
 
     logger.info("API application created")
     return app

@@ -58,6 +58,8 @@ User
 - **Hot-reload** — configuration changes take effect without restart
 - **Fully observable** — event bus, audit trail, metrics, REST API
 - **Thread-safe** — asyncio for concurrency, `threading.Lock` for shared state
+- **Deployment profiles** — lite (zero deps), standard (PostgreSQL), enterprise (multi-tenant)
+- **Run identity** — every work item gets a UUID `run_id` propagated through events, audit, and metrics
 
 ---
 
@@ -75,6 +77,8 @@ User
 ├───────────────────────────────────────────────────────────┤
 │  Adapters (llm_adapter, metrics, webhook, providers/)     │  Integrations
 ├───────────────────────────────────────────────────────────┤
+│  Connectors (registry, service, permissions, audit)       │  Ext. Capabilities
+├───────────────────────────────────────────────────────────┤
 │  Persistence (state_store, settings_store, config_history)│  Storage
 ├───────────────────────────────────────────────────────────┤
 │  Exceptions (exception hierarchy)                         │  Error Model
@@ -86,6 +90,41 @@ Each layer only depends on layers below it. The engine never imports from the AP
 ---
 
 ## Core Layer
+
+### Deployment Modes (`configuration/models.py`)
+
+Three explicit deployment profiles control which platform features are active:
+
+| Mode | Process Model | Storage | External Deps |
+|------|--------------|---------|---------------|
+| `lite` | Single process | File / SQLite | None |
+| `standard` | API + workers | PostgreSQL | PostgreSQL |
+| `enterprise` | API + workers + auth | PostgreSQL | PostgreSQL + auth |
+
+Set via `deployment_mode` in `settings.yaml`. Default: `lite`.
+
+### ExecutionContext (`configuration/models.py`)
+
+Immutable (frozen) Pydantic model propagated through every operation in a run:
+
+| Field | Default | Purpose |
+|-------|---------|---------|
+| `app_id` | `"default"` | Application namespace for multi-app hosting |
+| `run_id` | `""` (auto-assigned) | Unique UUID per work item submission |
+| `tenant_id` | `"default"` | Tenant isolation (enterprise) |
+| `environment` | `"development"` | Runtime environment tag |
+| `deployment_mode` | `DeploymentMode.LITE` | Active deployment profile |
+| `profile_name` | `""` | Active configuration profile |
+| `extra` | `{}` | Extensible key-value metadata |
+
+**Context lifecycle:**
+1. `create_root_context(settings, profile_name)` — built once in `engine.start()`
+2. `create_run_context(parent, run_id?)` — forked per `submit_work()` call with unique UUID
+3. `context_tags(ctx)` — flattened to `dict[str, str]` for metrics and structured logging
+
+Context is propagated to: `WorkItem.run_id/app_id`, `Event.run_id/app_id`, `AuditRecord.run_id/app_id`, `MetricsCollector` tags.
+
+---
 
 ### OrchestrationEngine (`core/engine.py`)
 
@@ -126,7 +165,7 @@ Priority-ordered async work queue backed by `asyncio.PriorityQueue`.
 - Duplicate IDs rejected
 - `pop(timeout)` returns `None` on timeout rather than blocking forever
 
-**WorkItem fields:** `id`, `type_id`, `title`, `data`, `priority` (0–10), `status`, `current_phase`, `submitted_at`, `metadata`, `results`, `error`, `attempt_count`.
+**WorkItem fields:** `id`, `type_id`, `title`, `data`, `priority` (0–10), `status`, `current_phase`, `submitted_at`, `metadata`, `results`, `error`, `attempt_count`, `run_id`, `app_id`.
 
 **Statuses:** `PENDING → QUEUED → IN_PROGRESS → COMPLETED | FAILED | CANCELLED`
 
@@ -171,7 +210,7 @@ Executes a single agent against a work item. Stateless — all context passed vi
 
 **LLM call:** Delegated to injected `llm_call_fn` callback (dependency injection).
 
-Returns `ExecutionResult` with: `agent_id`, `instance_id`, `work_id`, `phase_id`, `success`, `output`, `error`, `duration_seconds`, `attempt`.
+Returns `ExecutionResult` with: `agent_id`, `instance_id`, `work_id`, `phase_id`, `success`, `output`, `error`, `duration_seconds`, `attempt`, `run_id`.
 
 ---
 
@@ -188,7 +227,7 @@ Executes all agents assigned to a workflow phase.
 
 ### EventBus (`core/event_bus.py`)
 
-Async pub/sub event bus. All events are immutable frozen dataclasses.
+Async pub/sub event bus. All events are immutable frozen dataclasses with `app_id` and `run_id` fields for context propagation.
 
 **Event types:**
 
@@ -212,7 +251,11 @@ Async pub/sub event bus. All events are immutable frozen dataclasses.
 All Pydantic v2 models with `frozen = True` (immutable after creation).
 
 ```
-SettingsConfig          Workspace-level: api_keys, llm_endpoints, log_level, persistence_backend
+DeploymentMode          Enum: lite, standard, enterprise
+PersistenceBackend      Enum: file, sqlite, postgresql
+ExecutionContext        Frozen context: app_id, run_id, tenant_id, environment, deployment_mode, profile_name, extra
+
+SettingsConfig          Workspace-level: api_keys, llm_endpoints, log_level, persistence_backend, deployment_mode
 ├── api_keys            dict[str, str]  — provider → key
 └── llm_endpoints       dict[str, str]  — provider → URL
 
@@ -284,12 +327,72 @@ Append-only, hash-chained JSONL audit trail.
 
 - Each `AuditRecord` includes a SHA-256 hash linking it to the previous record
 - Record types: `DECISION`, `STATE_CHANGE`, `ESCALATION`, `ERROR`, `CONFIG_CHANGE`, `SYSTEM_EVENT`
+- All records carry `app_id` and `run_id` for scoped querying
 - `verify_chain()` detects tampering
-- `query(work_id, record_type, limit)` for filtered retrieval
+- `query(work_id, record_type, limit, app_id, run_id)` for filtered retrieval
 
 ### ReviewQueue (`governance/review_queue.py`)
 
 Queue for items requiring human review. Processing continues while items await review — reviews are informational/audit.
+
+---
+
+## Connector Capability Framework
+
+The connector framework provides a domain-agnostic way for agents and modules to invoke external systems (search, ticketing, repositories, messaging, etc.) through a uniform interface with built-in permission enforcement and audit logging.
+
+### ConnectorRegistry (`connectors/registry.py`)
+
+Thread-safe registry for connector providers and configuration.
+
+- `register_provider(provider)` — registers a `ConnectorProviderProtocol` implementor
+- `register_config(config)` — registers a `ConnectorConfig` (settings + permission policies)
+- `find_providers_for_capability(capability_type)` — returns enabled providers matching the capability
+
+### ConnectorService (`connectors/service.py`)
+
+Primary invocation abstraction. Owned by `OrchestrationEngine` (available via `engine.connector_service`).
+
+```
+ConnectorService.execute(capability_type, operation, parameters, context)
+  1. Resolve and validate capability_type
+  2. Build ConnectorInvocationRequest
+  3. evaluate_permission(request, policies)  → deny → PERMISSION_DENIED result
+  4. _resolve_provider(capability_type, preferred_provider)  → none → UNAVAILABLE result
+  5. provider.execute(request)  → exception → FAILURE result
+  6. _maybe_audit(request, result)
+  7. Return ConnectorInvocationResult
+```
+
+**`wrap_result_as_artifact`** — wraps a result in an `ExternalArtifact` envelope with provenance tracking for uniform handling across domain modules.
+
+### ConnectorProviderProtocol (`connectors/registry.py`)
+
+Structural protocol (no inheritance required):
+
+```python
+class ConnectorProviderProtocol(Protocol):
+    async def execute(self, request: ConnectorInvocationRequest) -> ConnectorInvocationResult: ...
+    def get_descriptor(self) -> ConnectorProviderDescriptor: ...
+```
+
+### CapabilityType Taxonomy
+
+`search` | `documents` | `messaging` | `ticketing` | `repository` | `telemetry` | `identity` | `external_api` | `file_storage` | `workflow_action`
+
+### Permission Evaluation (`connectors/permissions.py`)
+
+`evaluate_permission(request, policies)` — evaluates an ordered list of `ConnectorPermissionPolicy` objects:
+
+1. Skip disabled policies
+2. Skip policies whose `allowed_modules` / `allowed_agent_roles` don't match context
+3. Deny if capability or operation is in `denied_*` lists
+4. Deny if not in `allowed_*` lists (when lists are non-empty)
+5. Default: permit
+
+### Audit Integration (`connectors/audit.py`)
+
+`log_connector_invocation(audit_logger, request, result)` writes a `SYSTEM_EVENT` record containing capability type, connector ID, operation, parameter keys (not values), status, duration, and cost info.
 
 ---
 
@@ -365,7 +468,7 @@ FastAPI application created via `create_app()` factory. All routes under `/api/v
 
 | Group | Endpoints | Description |
 |-------|-----------|-------------|
-| Health | `GET /health`, `/health/ready`, `/health/live` | Liveness and readiness probes |
+| Health | `GET /health`, `/health/ready`, `/health/live`, `/context` | Liveness, readiness, execution context |
 | Agents | `GET/POST /agents`, `GET/PUT/DELETE /agents/{id}`, `POST /agents/{id}/scale`, `GET /agents/export`, `POST /agents/import` | Agent CRUD and scaling |
 | Workflow | `GET /workflow/phases`, `GET /workflow/phases/{id}` | Workflow introspection |
 | Work Items | `GET/POST /workitems`, `GET /workitems/{id}` | Work item submission and status |
@@ -374,6 +477,7 @@ FastAPI application created via `create_app()` factory. All routes under `/api/v
 | Metrics | `GET /metrics`, `GET /metrics/agents/{id}` | Aggregated and per-agent metrics |
 | Audit | `GET /audit` | Query audit trail (filters: `work_id`, `record_type`, `limit`) |
 | Config | `GET /config/profiles`, `GET /config/profile/export`, `POST /config/validate`, `GET /config/history` | Configuration management |
+| Connectors | `GET /connectors/capabilities`, `GET /connectors/providers` | Connector introspection |
 
 ---
 
@@ -413,12 +517,14 @@ Built-in profile templates: `content-moderation`, `software-dev`.
 
 ```
 1. SUBMIT
-   CLI/API ──► WorkQueue.push(item)
-               emit(WORK_SUBMITTED)
+   CLI/API ──► create_run_context() → assign run_id/app_id
+               WorkQueue.push(item)
+               emit(WORK_SUBMITTED, app_id=, run_id=)
 
 2. DEQUEUE
    Processing loop ──► WorkQueue.pop()
-                        emit(WORK_STARTED)
+                        reconstruct run context from item
+                        emit(WORK_STARTED, app_id=, run_id=)
 
 3. PIPELINE ENTRY
    PipelineManager.enter_pipeline(item) → initial phase
@@ -529,6 +635,7 @@ agent-orchestrator/
 │   │
 │   ├── core/
 │   │   ├── engine.py                    OrchestrationEngine (central coordinator)
+│   │   ├── context.py                   ExecutionContext helpers (create, fork, tags)
 │   │   ├── work_queue.py                Priority async work queue
 │   │   ├── pipeline_manager.py          Phase graph traversal
 │   │   ├── agent_pool.py                Agent instance pool with concurrency
@@ -553,6 +660,14 @@ agent-orchestrator/
 │   │       ├── google_provider.py      Google Gemini (sync → asyncio.to_thread)
 │   │       ├── grok_provider.py        xAI Grok (OpenAI SDK, custom base_url)
 │   │       └── ollama_provider.py      Ollama (httpx async HTTP)
+│   │
+│   ├── connectors/
+│   │   ├── __init__.py                  Public API exports
+│   │   ├── models.py                    12 Pydantic v2 frozen models (CapabilityType, ConnectorStatus, etc.)
+│   │   ├── registry.py                  Thread-safe ConnectorRegistry + ConnectorProviderProtocol
+│   │   ├── service.py                   ConnectorService (execute, wrap_result_as_artifact)
+│   │   ├── permissions.py               evaluate_permission() — ordered policy evaluation
+│   │   └── audit.py                     log_connector_invocation() — AuditLogger bridge
 │   │
 │   ├── persistence/
 │   │   ├── settings_store.py           YAML settings (atomic writes, env fallback)
@@ -614,7 +729,7 @@ Keys sourced from environment are never persisted to disk.
 
 ## Testing
 
-254 tests, all passing. All tests use mocked dependencies — no real API calls.
+800 tests, all passing. All tests use mocked dependencies — no real API calls.
 
 ```
 pytest tests/ -v            # run all tests
@@ -630,6 +745,12 @@ pytest tests/ --cov         # with coverage
 | `test_api.py` | 94 | All REST endpoints (health, CRUD, execution, governance, metrics, audit) |
 | `test_agent_manager.py` | 42 | Agent CRUD, import/export, profile component export |
 | `test_providers.py` | 21 | All 5 LLM providers, registration, adapter routing |
+| `test_execution_context.py` | 28 | DeploymentMode, ExecutionContext, context helpers, audit filtering |
+| `test_connectors.py` | 50+ | Connector models, registry, service, permissions, audit |
+| `test_contracts.py` | 59 | Contract models, registry, validator, service integration |
+| `test_*_providers.py` | 231 | Web search, documents, messaging, ticketing, repository providers |
+| `test_connector_governance.py` | 44 | Enable/disable, scoping, policies, discovery, permissions |
+| `test_provider_discovery.py` | 56 | Auto-discovery, lazy loading, from_env, entry points |
 
 ---
 
@@ -672,5 +793,6 @@ OrchestratorError             Base exception
 ├── AgentError                Agent not found / execution errors
 ├── GovernanceError           Policy evaluation errors
 ├── PersistenceError          File I/O / state errors
-└── WorkItemError             Work item submission errors
+├── WorkItemError             Work item submission errors
+└── ConnectorError            Connector-related errors
 ```

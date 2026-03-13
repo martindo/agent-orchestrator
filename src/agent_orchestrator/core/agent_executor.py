@@ -42,6 +42,7 @@ class ExecutionResult:
     duration_seconds: float = 0.0
     attempt: int = 1
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    run_id: str = ""
 
 
 class AgentExecutor:
@@ -66,6 +67,7 @@ class AgentExecutor:
         work_item: WorkItem,
         phase_id: str,
         phase_context: dict[str, Any] | None = None,
+        context: Any | None = None,
     ) -> ExecutionResult:
         """Execute an agent against a work item with retry logic.
 
@@ -121,6 +123,7 @@ class AgentExecutor:
         phase_id: str,
         phase_context: dict[str, Any],
         attempt: int,
+        context: Any | None = None,
     ) -> ExecutionResult:
         """Execute a single attempt."""
         definition = instance.definition

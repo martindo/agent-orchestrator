@@ -78,6 +78,8 @@ class Event:
     data: dict[str, Any] = field(default_factory=dict)
     source: str = ""
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    app_id: str = ""
+    run_id: str = ""
 
 
 class EventBus:

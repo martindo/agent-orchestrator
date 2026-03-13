@@ -21,6 +21,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
+from agent_orchestrator.configuration.loader import save_settings
 from agent_orchestrator.configuration.models import PolicyConfig
 from agent_orchestrator.configuration.validator import validate_profile
 from agent_orchestrator.exceptions import AgentError, ConfigurationError, OrchestratorError
@@ -86,6 +87,7 @@ class WorkItemRequest(BaseModel):
     title: str
     data: dict[str, Any] = Field(default_factory=dict)
     priority: int = 5
+    app_id: str = "default"
 
 
 class WorkItemResponse(BaseModel):
@@ -95,6 +97,20 @@ class WorkItemResponse(BaseModel):
     title: str
     status: str = "pending"
     current_phase: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)
+    results: dict[str, Any] = Field(default_factory=dict)
+    app_id: str = "default"
+    run_id: str = ""
+
+
+class ExecutionContextResponse(BaseModel):
+    """Current execution context response."""
+    app_id: str = "default"
+    run_id: str = ""
+    tenant_id: str = "default"
+    environment: str = "development"
+    deployment_mode: str = "lite"
+    profile_name: str = ""
 
 
 class ExecutionStatusResponse(BaseModel):
@@ -119,6 +135,20 @@ class ConfigValidationResponse(BaseModel):
     is_valid: bool
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class SettingsResponse(BaseModel):
+    """Orchestrator settings response (API keys masked)."""
+    api_keys: dict[str, str] = Field(default_factory=dict)
+    llm_endpoints: dict[str, str] = Field(default_factory=dict)
+    active_profile: str = ""
+    available_providers: list[str] = Field(default_factory=list)
+
+
+class UpdateSettingsRequest(BaseModel):
+    """Request body for updating orchestrator settings."""
+    api_keys: dict[str, str] | None = None
+    llm_endpoints: dict[str, str] | None = None
 
 
 class ProfileListResponse(BaseModel):
@@ -223,6 +253,25 @@ async def readiness_check() -> HealthResponse:
 async def liveness_check() -> HealthResponse:
     """Liveness check — indicates if the service is alive."""
     return HealthResponse(status="alive")
+
+
+# ---- Context Route ----
+
+
+@health_router.get("/context", response_model=ExecutionContextResponse)
+async def get_context(request: Request) -> ExecutionContextResponse:
+    """Return current execution context."""
+    ctx = getattr(request.app.state, "execution_context", None)
+    if ctx is None:
+        return ExecutionContextResponse()
+    return ExecutionContextResponse(
+        app_id=ctx.app_id,
+        run_id=ctx.run_id,
+        tenant_id=ctx.tenant_id,
+        environment=ctx.environment,
+        deployment_mode=ctx.deployment_mode.value,
+        profile_name=ctx.profile_name,
+    )
 
 
 # ---- Agent Routes ----
@@ -481,6 +530,7 @@ async def create_workitem(body: WorkItemRequest, request: Request) -> WorkItemRe
         title=body.title,
         data=body.data,
         priority=body.priority,
+        app_id=body.app_id,
     )
     try:
         await engine.submit_work(work_item)
@@ -493,6 +543,8 @@ async def create_workitem(body: WorkItemRequest, request: Request) -> WorkItemRe
         title=work_item.title,
         status=work_item.status.value,
         current_phase=work_item.current_phase,
+        app_id=work_item.app_id,
+        run_id=work_item.run_id,
     )
 
 
@@ -513,6 +565,10 @@ async def get_workitem(work_id: str, request: Request) -> WorkItemResponse:
         title=item.title,
         status=item.status.value,
         current_phase=item.current_phase,
+        data=item.data,
+        results=item.results,
+        app_id=item.app_id,
+        run_id=item.run_id,
     )
 
 
@@ -769,3 +825,770 @@ async def validate_config(request: Request) -> ConfigValidationResponse:
 async def get_config_history() -> list[dict[str, str]]:
     """Get configuration change history."""
     return []
+
+
+_AVAILABLE_PROVIDERS = ["anthropic", "openai", "google", "grok", "ollama"]
+
+
+def _build_settings_response(settings: Any) -> SettingsResponse:
+    """Build a SettingsResponse with masked API keys."""
+    masked = {k: "***" for k in settings.api_keys} if settings.api_keys else {}
+    return SettingsResponse(
+        api_keys=masked,
+        llm_endpoints=dict(settings.llm_endpoints) if settings.llm_endpoints else {},
+        active_profile=settings.active_profile,
+        available_providers=_AVAILABLE_PROVIDERS,
+    )
+
+
+@config_router.get("/config/settings", response_model=SettingsResponse)
+async def get_settings(request: Request) -> SettingsResponse:
+    """Get orchestrator settings (API keys masked)."""
+    config_mgr = getattr(request.app.state, "config_manager", None)
+    if config_mgr is None:
+        return SettingsResponse(available_providers=_AVAILABLE_PROVIDERS)
+    try:
+        settings = config_mgr.get_settings()
+        return _build_settings_response(settings)
+    except ConfigurationError:
+        return SettingsResponse(available_providers=_AVAILABLE_PROVIDERS)
+
+
+@config_router.put("/config/settings", response_model=SettingsResponse)
+async def update_settings(
+    body: UpdateSettingsRequest, request: Request,
+) -> SettingsResponse:
+    """Update orchestrator settings (API keys, LLM endpoints)."""
+    config_mgr = getattr(request.app.state, "config_manager", None)
+    if config_mgr is None:
+        raise HTTPException(status_code=503, detail="Configuration manager not initialized")
+
+    try:
+        current = config_mgr.get_settings()
+    except ConfigurationError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+    updates: dict[str, Any] = {}
+    if body.api_keys is not None:
+        merged_keys = dict(current.api_keys)
+        merged_keys.update(body.api_keys)
+        updates["api_keys"] = merged_keys
+    if body.llm_endpoints is not None:
+        merged_endpoints = dict(current.llm_endpoints)
+        merged_endpoints.update(body.llm_endpoints)
+        updates["llm_endpoints"] = merged_endpoints
+
+    if not updates:
+        raise HTTPException(status_code=422, detail="No update fields provided")
+
+    new_settings = current.model_copy(update=updates)
+    save_settings(config_mgr.workspace_dir, new_settings)
+    config_mgr.reload()
+
+    updated = config_mgr.get_settings()
+    return _build_settings_response(updated)
+
+
+class ModelInfo(BaseModel):
+    """Available model from a provider."""
+    id: str
+    name: str
+
+
+@config_router.get("/config/models/{provider}", response_model=list[ModelInfo])
+async def list_provider_models(provider: str, request: Request) -> list[ModelInfo]:
+    """List available models for a given LLM provider."""
+    if provider not in _AVAILABLE_PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
+
+    engine = getattr(request.app.state, "engine", None)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+
+    adapter = engine.llm_adapter
+    if adapter is None:
+        raise HTTPException(status_code=503, detail="LLM adapter not available")
+
+    models = await adapter.list_models(provider)
+    return [ModelInfo(id=m["id"], name=m["name"]) for m in models]
+
+
+# ---- Connector Routes ----
+
+connectors_router = APIRouter()
+
+
+@connectors_router.get("/connectors/capabilities", tags=["connectors"])
+async def list_capabilities(request: Request) -> dict[str, Any]:
+    """List all registered connector capability types."""
+    engine = _get_engine(request)
+    if engine is None or engine.connector_service is None:
+        return {"capabilities": []}
+    caps = engine.connector_service.list_available_capabilities()
+    return {"capabilities": [c.value for c in caps]}
+
+
+@connectors_router.get("/connectors/providers", tags=["connectors"])
+async def list_connector_providers(request: Request) -> dict[str, Any]:
+    """List all registered connector providers."""
+    engine = _get_engine(request)
+    if engine is None or engine.connector_service is None:
+        return {"providers": []}
+    providers = engine.connector_service.list_providers()
+    return {"providers": [p.model_dump() for p in providers]}
+
+
+@connectors_router.get("/connectors/providers/{provider_id}", tags=["connectors"])
+async def get_connector_provider(provider_id: str, request: Request) -> dict[str, Any]:
+    """Get details for a specific connector provider."""
+    engine = _get_engine(request)
+    if engine is None or engine.connector_service is None:
+        raise HTTPException(status_code=503, detail="Connector service not initialized")
+    provider = engine.connector_service._registry.get_provider(provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider_id}' not found")
+    return provider.get_descriptor().model_dump()
+
+
+@connectors_router.get(
+    "/connectors/capabilities/{capability_type}/providers", tags=["connectors"]
+)
+async def list_providers_for_capability(
+    capability_type: str, request: Request
+) -> dict[str, Any]:
+    """List providers that support a specific capability type."""
+    engine = _get_engine(request)
+    if engine is None or engine.connector_service is None:
+        return {"capability_type": capability_type, "providers": []}
+    from agent_orchestrator.connectors import CapabilityType
+    try:
+        cap = CapabilityType(capability_type)
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail=f"Unknown capability_type: {capability_type!r}"
+        )
+    providers = engine.connector_service._registry.find_providers_for_capability(cap)
+    return {
+        "capability_type": capability_type,
+        "providers": [p.get_descriptor().model_dump() for p in providers],
+    }
+
+
+@connectors_router.get("/connectors/configs", tags=["connectors"])
+async def list_connector_configs(request: Request) -> dict[str, Any]:
+    """List registered connector configurations."""
+    engine = _get_engine(request)
+    if engine is None or engine.connector_service is None:
+        return {"configs": []}
+    configs = engine.connector_service.get_configs()
+    return {"configs": [c.model_dump() for c in configs]}
+
+
+@connectors_router.get("/connectors/traces", tags=["connectors"])
+async def get_connector_traces(
+    request: Request,
+    run_id: str | None = None,
+    connector_id: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Query connector execution traces."""
+    engine = _get_engine(request)
+    if engine is None or engine.connector_service is None:
+        return {"traces": []}
+    traces = engine.connector_service.get_traces(
+        run_id=run_id, connector_id=connector_id, limit=limit
+    )
+    return {"traces": [t.model_dump() for t in traces]}
+
+
+@connectors_router.get("/connectors/traces/summary", tags=["connectors"])
+async def get_connector_trace_summary(request: Request) -> dict[str, Any]:
+    """Get aggregated summary of connector execution traces."""
+    engine = _get_engine(request)
+    if engine is None or engine.connector_service is None:
+        return {"total_traces": 0, "by_status": {}, "by_capability": {}}
+    return engine.connector_service.get_trace_summary()
+
+
+# ---- Connector Execute Route ----
+
+
+class ConnectorExecuteRequest(BaseModel):
+    """Request body for executing a connector capability operation."""
+
+    capability_type: str
+    operation: str
+    parameters: dict = Field(default_factory=dict)
+    context: dict = Field(default_factory=dict)
+    preferred_provider: str | None = None
+    timeout_seconds: float | None = None
+
+
+@connectors_router.post("/connectors/execute", tags=["connectors"])
+async def execute_connector(
+    body: ConnectorExecuteRequest, request: Request
+) -> dict[str, Any]:
+    """Execute a connector capability operation.
+
+    Resolves the appropriate provider for the given capability_type and operation,
+    enforces permission policies, applies retry logic, and returns the result.
+
+    Returns a serialized ConnectorInvocationResult with status, payload, cost_info,
+    and duration_ms. Callers should check ``status`` before consuming ``payload``.
+    """
+    engine = _get_engine(request)
+    if engine is None or engine.connector_service is None:
+        raise HTTPException(status_code=503, detail="Connector service not initialized")
+
+    from agent_orchestrator.connectors import CapabilityType
+
+    try:
+        cap = CapabilityType(body.capability_type)
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail=f"Unknown capability_type: {body.capability_type!r}"
+        )
+
+    result = await engine.connector_service.execute(
+        capability_type=cap,
+        operation=body.operation,
+        parameters=body.parameters,
+        context=body.context or None,
+        preferred_provider=body.preferred_provider,
+        timeout_seconds=body.timeout_seconds,
+    )
+    return result.model_dump()
+
+
+# ---- Connector Governance Routes ----
+
+class ConnectorEnablementRequest(BaseModel):
+    """Request body for registering a connector config."""
+    connector_id: str
+    provider_id: str
+    capability_type: str
+    display_name: str = ""
+    enabled: bool = True
+    scoped_modules: list[str] = Field(default_factory=list)
+    scoped_agent_roles: list[str] = Field(default_factory=list)
+
+
+class ConnectorScopingRequest(BaseModel):
+    """Request body for updating connector scoping."""
+    scoped_modules: list[str] | None = None
+    scoped_agent_roles: list[str] | None = None
+
+
+class ConnectorPolicyRequest(BaseModel):
+    """Request body for adding a permission policy to a connector."""
+    policy_id: str
+    requires_approval: bool = False
+    allowed_modules: list[str] = Field(default_factory=list)
+    allowed_agent_roles: list[str] = Field(default_factory=list)
+    denied_operations: list[str] = Field(default_factory=list)
+
+
+def _get_governance(request: Request):
+    """Return the connector governance service or raise 503."""
+    engine = _get_engine(request)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+    return engine.connector_governance_service
+
+
+@connectors_router.get("/connectors/configs/{connector_id}", tags=["connectors"])
+async def get_connector_config(connector_id: str, request: Request) -> dict[str, Any]:
+    """Get a specific connector configuration."""
+    engine = _get_engine(request)
+    if engine is None or engine.connector_service is None:
+        raise HTTPException(status_code=503, detail="Connector service not initialized")
+    from agent_orchestrator.connectors import ConnectorRegistry
+    config = engine.connector_service._registry.get_config(connector_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail=f"Connector config '{connector_id}' not found")
+    return config.model_dump()
+
+
+@connectors_router.post("/connectors/configs", tags=["connectors"])
+async def register_connector_config(
+    body: ConnectorEnablementRequest, request: Request
+) -> dict[str, Any]:
+    """Register a new connector configuration."""
+    engine = _get_engine(request)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+    from agent_orchestrator.connectors import CapabilityType, ConnectorConfig
+    try:
+        cap = CapabilityType(body.capability_type)
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail=f"Unknown capability_type: {body.capability_type!r}"
+        )
+    config = ConnectorConfig(
+        connector_id=body.connector_id,
+        provider_id=body.provider_id,
+        capability_type=cap,
+        display_name=body.display_name,
+        enabled=body.enabled,
+        scoped_modules=body.scoped_modules,
+        scoped_agent_roles=body.scoped_agent_roles,
+    )
+    engine.connector_governance_service._registry.register_config(config)
+    return config.model_dump()
+
+
+@connectors_router.post("/connectors/configs/{connector_id}/enable", tags=["connectors"])
+async def enable_connector(connector_id: str, request: Request) -> dict[str, Any]:
+    """Enable a connector at runtime."""
+    from agent_orchestrator.connectors.governance_service import ConnectorGovernanceError
+    try:
+        updated = _get_governance(request).enable_connector(connector_id)
+    except ConnectorGovernanceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return updated.model_dump()
+
+
+@connectors_router.post("/connectors/configs/{connector_id}/disable", tags=["connectors"])
+async def disable_connector(connector_id: str, request: Request) -> dict[str, Any]:
+    """Disable a connector at runtime."""
+    from agent_orchestrator.connectors.governance_service import ConnectorGovernanceError
+    try:
+        updated = _get_governance(request).disable_connector(connector_id)
+    except ConnectorGovernanceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return updated.model_dump()
+
+
+@connectors_router.put("/connectors/configs/{connector_id}/scoping", tags=["connectors"])
+async def update_connector_scoping(
+    connector_id: str, body: ConnectorScopingRequest, request: Request
+) -> dict[str, Any]:
+    """Update module and/or agent-role scoping for a connector."""
+    from agent_orchestrator.connectors.governance_service import ConnectorGovernanceError
+    try:
+        updated = _get_governance(request).update_scoping(
+            connector_id,
+            scoped_modules=body.scoped_modules,
+            scoped_agent_roles=body.scoped_agent_roles,
+        )
+    except ConnectorGovernanceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return updated.model_dump()
+
+
+@connectors_router.post("/connectors/configs/{connector_id}/policies", tags=["connectors"])
+async def add_connector_policy(
+    connector_id: str, body: ConnectorPolicyRequest, request: Request
+) -> dict[str, Any]:
+    """Add a permission policy to a connector configuration."""
+    from agent_orchestrator.connectors import ConnectorPermissionPolicy
+    from agent_orchestrator.connectors.governance_service import ConnectorGovernanceError
+    policy = ConnectorPermissionPolicy(
+        policy_id=body.policy_id,
+        requires_approval=body.requires_approval,
+        allowed_modules=body.allowed_modules,
+        allowed_agent_roles=body.allowed_agent_roles,
+        denied_operations=body.denied_operations,
+    )
+    try:
+        updated = _get_governance(request).add_policy(connector_id, policy)
+    except ConnectorGovernanceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return updated.model_dump()
+
+
+@connectors_router.delete(
+    "/connectors/configs/{connector_id}/policies/{policy_id}", tags=["connectors"]
+)
+async def remove_connector_policy(
+    connector_id: str, policy_id: str, request: Request
+) -> dict[str, Any]:
+    """Remove a permission policy from a connector configuration."""
+    from agent_orchestrator.connectors.governance_service import ConnectorGovernanceError
+    try:
+        updated = _get_governance(request).remove_policy(connector_id, policy_id)
+    except ConnectorGovernanceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return updated.model_dump()
+
+
+@connectors_router.get("/connectors/discovery", tags=["connectors"])
+async def discover_connectors(
+    request: Request,
+    module_name: str | None = None,
+    agent_role: str | None = None,
+) -> dict[str, Any]:
+    """Discover connectors accessible in a given execution context."""
+    governance = _get_governance(request)
+    items = governance.discover(module_name=module_name, agent_role=agent_role)
+    return {"connectors": [item.as_dict() for item in items]}
+
+
+@connectors_router.get("/connectors/discovery/status", tags=["connectors"])
+async def get_discovery_status(request: Request) -> dict[str, Any]:
+    """Return the result of the most recent provider auto-discovery pass."""
+    engine = _get_engine(request)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+    result = engine.last_discovery_result
+    if result is None:
+        return {"registered": [], "skipped": [], "errors": [], "summary": "no discovery run yet"}
+    return {**result.as_dict(), "summary": result.summary()}
+
+
+@connectors_router.post("/connectors/discovery/refresh", tags=["connectors"])
+async def refresh_provider_discovery(
+    request: Request,
+    plugin_directory: str | None = None,
+) -> dict[str, Any]:
+    """Trigger a new provider discovery pass.
+
+    Args:
+        plugin_directory: Optional filesystem path to scan for external providers.
+    """
+    engine = _get_engine(request)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+    from pathlib import Path
+    plugin_path = Path(plugin_directory) if plugin_directory else None
+    result = engine.rediscover_providers(plugin_directory=plugin_path)
+    return {**result.as_dict(), "summary": result.summary()}
+
+
+@connectors_router.get("/connectors/configs/{connector_id}/permissions", tags=["connectors"])
+async def get_effective_permissions(
+    connector_id: str,
+    request: Request,
+    module_name: str | None = None,
+    agent_role: str | None = None,
+) -> dict[str, Any]:
+    """Get effective permissions for a connector in a given execution context."""
+    from agent_orchestrator.connectors.governance_service import ConnectorGovernanceError
+    try:
+        perms = _get_governance(request).get_effective_permissions(
+            connector_id, module_name=module_name, agent_role=agent_role
+        )
+    except ConnectorGovernanceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return perms.as_dict()
+
+
+# ---- Contract Routes ----
+
+
+class CapabilityContractCreateRequest(BaseModel):
+    """Request body for registering a capability contract."""
+
+    contract_id: str
+    capability_type: str
+    operation_name: str
+    description: str = ""
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    output_schema: dict[str, Any] = Field(default_factory=dict)
+    read_write_classification: str = "read_only"
+    permission_requirements: list[str] = Field(default_factory=list)
+    audit_requirements: str = "invocation"
+    cost_reporting_required: bool = False
+    failure_semantics: str = "warn_only"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ArtifactContractCreateRequest(BaseModel):
+    """Request body for registering an artifact contract."""
+
+    contract_id: str
+    artifact_type: str
+    description: str = ""
+    required_fields: list[str] = Field(default_factory=list)
+    optional_fields: list[str] = Field(default_factory=list)
+    validation_rules: list[dict[str, Any]] = Field(default_factory=list)
+    provenance_requirements: list[str] = Field(default_factory=list)
+    lifecycle_state_model: list[str] = Field(default_factory=list)
+    producer_constraints: list[str] = Field(default_factory=list)
+    consumer_constraints: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ValidatePayloadRequest(BaseModel):
+    """Request body for on-demand contract validation."""
+
+    payload: dict[str, Any]
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+def _get_contract_registry(request: Request):
+    """Return the ContractRegistry from app state, or None."""
+    return getattr(request.app.state, "contract_registry", None)
+
+
+contracts_router = APIRouter()
+
+
+@contracts_router.get("/contracts/summary", tags=["contracts"])
+async def get_contracts_summary(request: Request) -> dict[str, Any]:
+    """Return a summary of all registered contracts."""
+    registry = _get_contract_registry(request)
+    if registry is None:
+        return {"capability_contracts": 0, "artifact_contracts": 0}
+    return registry.summary()
+
+
+# ---- Capability Contracts ----
+
+
+@contracts_router.get("/contracts/capability", tags=["contracts"])
+async def list_capability_contracts(
+    request: Request,
+    capability_type: str | None = None,
+    operation_name: str | None = None,
+) -> list[dict[str, Any]]:
+    """List registered capability contracts, optionally filtered by type/operation."""
+    registry = _get_contract_registry(request)
+    if registry is None:
+        return []
+    if capability_type and operation_name:
+        contracts = registry.find_capability_contracts(capability_type, operation_name)
+    else:
+        contracts = registry.list_capability_contracts()
+        if capability_type:
+            contracts = [c for c in contracts if c.capability_type == capability_type]
+    return [c.model_dump() for c in contracts]
+
+
+@contracts_router.post("/contracts/capability", status_code=201, tags=["contracts"])
+async def register_capability_contract(
+    body: CapabilityContractCreateRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """Register a new capability contract."""
+    from agent_orchestrator.contracts import (
+        AuditRequirement,
+        CapabilityContract,
+        FailureSemantic,
+        ReadWriteClassification,
+    )
+
+    registry = _get_contract_registry(request)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="Contract registry not available")
+
+    try:
+        contract = CapabilityContract(
+            contract_id=body.contract_id,
+            capability_type=body.capability_type,
+            operation_name=body.operation_name,
+            description=body.description,
+            input_schema=body.input_schema,
+            output_schema=body.output_schema,
+            read_write_classification=ReadWriteClassification(body.read_write_classification),
+            permission_requirements=body.permission_requirements,
+            audit_requirements=AuditRequirement(body.audit_requirements),
+            cost_reporting_required=body.cost_reporting_required,
+            failure_semantics=FailureSemantic(body.failure_semantics),
+            metadata=body.metadata,
+        )
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    registry.register_capability_contract(contract)
+    return contract.model_dump()
+
+
+@contracts_router.get("/contracts/capability/{contract_id}", tags=["contracts"])
+async def get_capability_contract(
+    contract_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """Get a registered capability contract by ID."""
+    registry = _get_contract_registry(request)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="Contract registry not available")
+    contract = registry.get_capability_contract(contract_id)
+    if contract is None:
+        raise HTTPException(status_code=404, detail=f"Capability contract '{contract_id}' not found")
+    return contract.model_dump()
+
+
+@contracts_router.delete("/contracts/capability/{contract_id}", tags=["contracts"])
+async def unregister_capability_contract(
+    contract_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """Unregister a capability contract by ID."""
+    registry = _get_contract_registry(request)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="Contract registry not available")
+    removed = registry.unregister_capability_contract(contract_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Capability contract '{contract_id}' not found")
+    return {"removed": True, "contract_id": contract_id}
+
+
+@contracts_router.post(
+    "/contracts/capability/{contract_id}/validate-input",
+    tags=["contracts"],
+)
+async def validate_capability_input(
+    contract_id: str,
+    body: ValidatePayloadRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """Validate a payload against a capability contract's input schema."""
+    from agent_orchestrator.contracts import ContractValidator
+
+    registry = _get_contract_registry(request)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="Contract registry not available")
+    contract = registry.get_capability_contract(contract_id)
+    if contract is None:
+        raise HTTPException(status_code=404, detail=f"Capability contract '{contract_id}' not found")
+
+    validator = ContractValidator(registry)
+    result = validator.validate_capability_input(
+        contract.capability_type,
+        contract.operation_name,
+        body.payload,
+        body.context,
+    )
+    return result.model_dump() if result is not None else {"is_valid": True, "contract_id": contract_id, "violations": []}
+
+
+@contracts_router.post(
+    "/contracts/capability/{contract_id}/validate-output",
+    tags=["contracts"],
+)
+async def validate_capability_output(
+    contract_id: str,
+    body: ValidatePayloadRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """Validate a payload against a capability contract's output schema."""
+    from agent_orchestrator.contracts import ContractValidator
+
+    registry = _get_contract_registry(request)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="Contract registry not available")
+    contract = registry.get_capability_contract(contract_id)
+    if contract is None:
+        raise HTTPException(status_code=404, detail=f"Capability contract '{contract_id}' not found")
+
+    validator = ContractValidator(registry)
+    result = validator.validate_capability_output(
+        contract.capability_type,
+        contract.operation_name,
+        body.payload,
+        body.context,
+    )
+    return result.model_dump() if result is not None else {"is_valid": True, "contract_id": contract_id, "violations": []}
+
+
+# ---- Artifact Contracts ----
+
+
+@contracts_router.get("/contracts/artifact", tags=["contracts"])
+async def list_artifact_contracts(
+    request: Request,
+    artifact_type: str | None = None,
+) -> list[dict[str, Any]]:
+    """List registered artifact contracts, optionally filtered by artifact_type."""
+    registry = _get_contract_registry(request)
+    if registry is None:
+        return []
+    if artifact_type:
+        contracts = registry.find_artifact_contracts(artifact_type)
+    else:
+        contracts = registry.list_artifact_contracts()
+    return [c.model_dump() for c in contracts]
+
+
+@contracts_router.post("/contracts/artifact", status_code=201, tags=["contracts"])
+async def register_artifact_contract(
+    body: ArtifactContractCreateRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """Register a new artifact contract."""
+    from agent_orchestrator.contracts import ArtifactContract, ArtifactValidationRule, LifecycleState
+
+    registry = _get_contract_registry(request)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="Contract registry not available")
+
+    try:
+        rules = [ArtifactValidationRule(**r) for r in body.validation_rules]
+        lifecycle = [LifecycleState(s) for s in body.lifecycle_state_model]
+        contract = ArtifactContract(
+            contract_id=body.contract_id,
+            artifact_type=body.artifact_type,
+            description=body.description,
+            required_fields=body.required_fields,
+            optional_fields=body.optional_fields,
+            validation_rules=rules,
+            provenance_requirements=body.provenance_requirements,
+            lifecycle_state_model=lifecycle,
+            producer_constraints=body.producer_constraints,
+            consumer_constraints=body.consumer_constraints,
+            metadata=body.metadata,
+        )
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    registry.register_artifact_contract(contract)
+    return contract.model_dump()
+
+
+@contracts_router.get("/contracts/artifact/{contract_id}", tags=["contracts"])
+async def get_artifact_contract(
+    contract_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """Get a registered artifact contract by ID."""
+    registry = _get_contract_registry(request)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="Contract registry not available")
+    contract = registry.get_artifact_contract(contract_id)
+    if contract is None:
+        raise HTTPException(status_code=404, detail=f"Artifact contract '{contract_id}' not found")
+    return contract.model_dump()
+
+
+@contracts_router.delete("/contracts/artifact/{contract_id}", tags=["contracts"])
+async def unregister_artifact_contract(
+    contract_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """Unregister an artifact contract by ID."""
+    registry = _get_contract_registry(request)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="Contract registry not available")
+    removed = registry.unregister_artifact_contract(contract_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Artifact contract '{contract_id}' not found")
+    return {"removed": True, "contract_id": contract_id}
+
+
+@contracts_router.post(
+    "/contracts/artifact/{contract_id}/validate",
+    tags=["contracts"],
+)
+async def validate_artifact_payload(
+    contract_id: str,
+    body: ValidatePayloadRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """Validate a payload against a registered artifact contract."""
+    from agent_orchestrator.contracts import ContractValidator
+
+    registry = _get_contract_registry(request)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="Contract registry not available")
+    contract = registry.get_artifact_contract(contract_id)
+    if contract is None:
+        raise HTTPException(status_code=404, detail=f"Artifact contract '{contract_id}' not found")
+
+    validator = ContractValidator(registry)
+    result = validator.validate_artifact(
+        contract.artifact_type,
+        body.payload,
+        body.context,
+    )
+    return result.model_dump() if result is not None else {"is_valid": True, "contract_id": contract_id, "violations": []}

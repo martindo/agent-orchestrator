@@ -23,6 +23,20 @@ class OllamaProvider:
         self._endpoint = endpoint.rstrip("/")
         self._client = httpx.AsyncClient(timeout=120.0)
 
+    async def list_models(self) -> list[dict[str, str]]:
+        """List locally available Ollama models via /api/tags."""
+        try:
+            response = await self._client.get(f"{self._endpoint}/api/tags")
+            response.raise_for_status()
+            data = response.json()
+            return [
+                {"id": m["name"], "name": m["name"]}
+                for m in data.get("models", [])
+            ]
+        except Exception:
+            logger.warning("Failed to list Ollama models", exc_info=True)
+            return []
+
     async def complete(
         self,
         messages: list[dict[str, str]],

@@ -18,6 +18,20 @@ class GoogleProvider:
         genai.configure(api_key=api_key)
         self._api_key = api_key
 
+    async def list_models(self) -> list[dict[str, str]]:
+        """List available Gemini models."""
+        try:
+            def _sync_list() -> list[dict[str, str]]:
+                models = []
+                for m in genai.list_models():
+                    if "generateContent" in (m.supported_generation_methods or []):
+                        models.append({"id": m.name.replace("models/", ""), "name": m.display_name or m.name})
+                return models
+            return await asyncio.to_thread(_sync_list)
+        except Exception:
+            logger.warning("Failed to list Google models via API", exc_info=True)
+            return []
+
     async def complete(
         self,
         messages: list[dict[str, str]],

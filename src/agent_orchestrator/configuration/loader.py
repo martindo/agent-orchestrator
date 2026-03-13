@@ -23,6 +23,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from agent_orchestrator.configuration.models import (
     AgentDefinition,
+    AppManifest,
     GovernanceConfig,
     ProfileConfig,
     SettingsConfig,
@@ -41,6 +42,7 @@ AGENTS_JSON_FILENAME = "agents.json"
 WORKFLOW_FILENAME = "workflow.yaml"
 GOVERNANCE_FILENAME = "governance.yaml"
 WORKITEMS_FILENAME = "workitems.yaml"
+APP_MANIFEST_FILENAME = "app.yaml"
 PROFILES_DIR_NAME = "profiles"
 SUPPORTED_YAML_EXTENSIONS = frozenset({".yaml", ".yml"})
 SUPPORTED_JSON_EXTENSIONS = frozenset({".json"})
@@ -350,11 +352,28 @@ def _load_work_item_types(profile_dir: Path) -> list[WorkItemTypeConfig]:
         raise ConfigurationError(msg) from e
 
 
+def _load_app_manifest(profile_dir: Path) -> AppManifest | None:
+    """Load optional app manifest from app.yaml.
+
+    Returns None if app.yaml does not exist — profiles work without it.
+    """
+    manifest_path = profile_dir / APP_MANIFEST_FILENAME
+    if not manifest_path.exists():
+        return None
+    data = _read_yaml(manifest_path)
+    try:
+        return AppManifest(**data)
+    except PydanticValidationError as e:
+        msg = f"Invalid app manifest in {manifest_path}: {e}"
+        raise ConfigurationError(msg) from e
+
+
 def load_profile(profile_dir: Path) -> ProfileConfig:
     """Load a complete profile from a directory.
 
-    Loads agents.yaml, workflow.yaml, governance.yaml, and workitems.yaml
-    from the given profile directory and assembles them into a ProfileConfig.
+    Loads agents.yaml, workflow.yaml, governance.yaml, workitems.yaml,
+    and optionally app.yaml from the given profile directory and assembles
+    them into a ProfileConfig.
 
     Args:
         profile_dir: Directory containing profile YAML files.
@@ -377,6 +396,7 @@ def load_profile(profile_dir: Path) -> ProfileConfig:
     workflow = _load_workflow(profile_dir)
     governance = _load_governance(profile_dir)
     work_item_types = _load_work_item_types(profile_dir)
+    manifest = _load_app_manifest(profile_dir)
 
     return ProfileConfig(
         name=profile_name,
@@ -384,6 +404,7 @@ def load_profile(profile_dir: Path) -> ProfileConfig:
         workflow=workflow,
         governance=governance,
         work_item_types=work_item_types,
+        manifest=manifest,
     )
 
 

@@ -699,5 +699,182 @@ def agent_export(fmt: str, output: str, workspace: str) -> None:
         sys.exit(1)
 
 
+@main.command("new-app")
+@click.argument("name")
+@click.option("--workspace", "-w", type=click.Path(), default=".")
+@click.option("--with-hooks", is_flag=True, default=False, help="Generate a hooks skeleton")
+def new_app(name: str, workspace: str, with_hooks: bool) -> None:
+    """Scaffold a new app profile with starter configuration.
+
+    Creates a complete profile directory with agents, workflow,
+    governance, work items, app manifest, and test scaffolding.
+
+    Example:
+        agent-orchestrator new-app my-app --workspace workspace
+    """
+    workspace_path = Path(workspace).resolve()
+    profile_dir = workspace_path / "profiles" / name
+    _setup_logging()
+
+    if profile_dir.exists():
+        click.echo(f"Profile '{name}' already exists at {profile_dir}", err=True)
+        sys.exit(1)
+
+    profile_dir.mkdir(parents=True)
+
+    # app.yaml
+    app_manifest = {
+        "name": name,
+        "version": "0.1.0",
+        "description": f"{name} app built on agent-orchestrator",
+        "platform_version": "0.1.0",
+        "requires": {"providers": ["openai"]},
+        "produces": {"work_item_types": ["task"]},
+        "hooks": {},
+        "author": "",
+    }
+
+    # agents.yaml
+    agents_data = {
+        "agents": [
+            {
+                "id": f"{name}-agent",
+                "name": f"{name.replace('-', ' ').title()} Agent",
+                "system_prompt": "You are a helpful assistant.",
+                "phases": ["process"],
+                "llm": {"provider": "openai", "model": "gpt-4o"},
+            }
+        ]
+    }
+
+    # workflow.yaml
+    workflow_data = {
+        "name": name,
+        "statuses": [
+            {"id": "pending", "name": "Pending", "is_initial": True, "transitions_to": ["active"]},
+            {"id": "active", "name": "Active", "transitions_to": ["done"]},
+            {"id": "done", "name": "Done", "is_terminal": True},
+        ],
+        "phases": [
+            {
+                "id": "process",
+                "name": "Process",
+                "order": 1,
+                "agents": [f"{name}-agent"],
+                "on_success": "complete",
+            },
+            {"id": "complete", "name": "Complete", "order": 2, "is_terminal": True},
+        ],
+    }
+
+    # governance.yaml
+    governance_data = {
+        "delegated_authority": {
+            "auto_approve_threshold": 0.8,
+            "review_threshold": 0.5,
+            "abort_threshold": 0.2,
+        },
+        "policies": [],
+    }
+
+    # workitems.yaml
+    workitems_data = {"work_item_types": [{"id": "task", "name": "Task"}]}
+
+    # Write config files
+    for filename, data in [
+        ("app.yaml", app_manifest),
+        ("agents.yaml", agents_data),
+        ("workflow.yaml", workflow_data),
+        ("governance.yaml", governance_data),
+        ("workitems.yaml", workitems_data),
+    ]:
+        with open(profile_dir / filename, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+
+    # helpers/ directory
+    helpers_dir = profile_dir / "helpers"
+    helpers_dir.mkdir()
+    (helpers_dir / "__init__.py").write_text(
+        f'"""Domain helpers for {name}."""\n',
+        encoding="utf-8",
+    )
+
+    if with_hooks:
+        hooks_content = f'''"""Phase context hooks for {name}.
+
+Register in app.yaml under hooks:
+    process: "{name}.helpers.hooks:process_hook"
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+def process_hook(work_item: Any, phase: Any) -> dict[str, Any]:
+    """Inject custom context into the 'process' phase.
+
+    Args:
+        work_item: The current WorkItem being processed.
+        phase: The WorkflowPhaseConfig for the current phase.
+
+    Returns:
+        Dict of extra context passed to the phase executor.
+    """
+    logger.info("process_hook called for work item %s", work_item.id)
+    return {{}}\n'''
+        (helpers_dir / "hooks.py").write_text(hooks_content, encoding="utf-8")
+        # Update manifest to reference the hook
+        app_manifest["hooks"] = {"process": f"{name}.helpers.hooks:process_hook"}
+        with open(profile_dir / "app.yaml", "w", encoding="utf-8") as f:
+            yaml.dump(app_manifest, f, default_flow_style=False, sort_keys=False)
+
+    # tests/ directory
+    tests_dir = profile_dir / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "__init__.py").write_text("", encoding="utf-8")
+
+    conftest_content = '''"""Test fixtures for app tests."""
+
+from __future__ import annotations
+
+from agent_orchestrator.testing import make_agent, make_profile, make_work_item
+'''
+    (tests_dir / "conftest.py").write_text(conftest_content, encoding="utf-8")
+
+    test_example_content = f'''"""Example tests for {name}."""
+
+from __future__ import annotations
+
+from agent_orchestrator.testing import make_agent, make_profile, make_work_item
+
+
+def test_create_work_item() -> None:
+    """Verify work items can be created with defaults."""
+    item = make_work_item(title="Sample task for {name}")
+    assert item.title == "Sample task for {name}"
+    assert item.status.value == "pending"
+
+
+def test_create_profile() -> None:
+    """Verify a profile can be built from test helpers."""
+    agent = make_agent(id="{name}-agent", phases=["process"])
+    profile = make_profile(name="{name}", agents=[agent])
+    assert profile.name == "{name}"
+    assert len(profile.agents) == 1
+'''
+    (tests_dir / "test_example.py").write_text(test_example_content, encoding="utf-8")
+
+    click.echo(f"Created app '{name}' at {profile_dir}")
+    click.echo("  Files:")
+    for path in sorted(profile_dir.rglob("*")):
+        if path.is_file():
+            rel = path.relative_to(profile_dir)
+            click.echo(f"    {rel}")
+
+
 if __name__ == "__main__":
     main()

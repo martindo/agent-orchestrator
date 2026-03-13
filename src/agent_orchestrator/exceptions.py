@@ -39,3 +39,19 @@ class PersistenceError(OrchestratorError):
 
 class WorkItemError(OrchestratorError):
     """Work item creation, submission, or processing error."""
+
+
+class ConnectorError(OrchestratorError):
+    """Raised for connector-related errors."""
+
+
+class ContractError(OrchestratorError):
+    """Raised when a contract registration or resolution error occurs."""
+
+
+class ContractViolationError(ContractError):
+    """Raised when a contract validation failure should halt execution.
+
+    Only raised when CapabilityContract.failure_semantics == FailureSemantic.FAIL_FAST
+    and the caller chooses strict enforcement.
+    """

@@ -55,6 +55,8 @@ class WorkItem:
     data: dict[str, Any] = field(default_factory=dict)
     priority: int = DEFAULT_PRIORITY
     status: WorkItemStatus = WorkItemStatus.PENDING
+    run_id: str = ""
+    app_id: str = "default"
     current_phase: str = ""
     submitted_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: datetime | None = None
