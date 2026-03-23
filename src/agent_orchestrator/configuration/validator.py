@@ -19,6 +19,7 @@ from agent_orchestrator.configuration.models import (
     ProfileConfig,
     SettingsConfig,
     WorkflowConfig,
+    WorkflowPhaseConfig,
 )
 
 logger = logging.getLogger(__name__)
@@ -281,6 +282,90 @@ def validate_governance(governance: GovernanceConfig) -> ValidationResult:
     return result
 
 
+def validate_capability_coverage(profile: ProfileConfig) -> ValidationResult:
+    """Validate that phase capability requirements are covered by assigned agents.
+
+    Checks:
+    - Phases with required_capabilities have agents with matching skills
+    - Quality gate conditions reference fields covered by expected_output_fields
+    - Non-terminal phases have at least one agent
+    - Agents with skills not referenced by any phase (info-level)
+
+    Args:
+        profile: Profile configuration to validate.
+
+    Returns:
+        ValidationResult with capability gap findings.
+    """
+    result = ValidationResult()
+    agent_map = {a.id: a for a in profile.agents if a.enabled}
+    all_required: set[str] = set()
+
+    for phase in profile.workflow.phases:
+        if phase.is_terminal or phase.skip:
+            continue
+
+        # Collect skills from assigned agents
+        phase_skills: set[str] = set()
+        for agent_id in phase.agents:
+            agent = agent_map.get(agent_id)
+            if agent is not None:
+                phase_skills.update(agent.skills)
+
+        # Check required capabilities
+        if phase.required_capabilities:
+            all_required.update(phase.required_capabilities)
+            missing = set(phase.required_capabilities) - phase_skills
+            if missing:
+                result.add_warning(
+                    f"Phase '{phase.id}' requires capabilities {sorted(missing)} "
+                    f"but no assigned agent provides them. "
+                    f"Available skills: {sorted(phase_skills)}"
+                )
+
+        # Check expected output fields against quality gate conditions
+        gate_fields = _extract_gate_fields(phase)
+        if gate_fields and phase.expected_output_fields:
+            unmatched = gate_fields - set(phase.expected_output_fields)
+            if unmatched:
+                result.add_warning(
+                    f"Phase '{phase.id}' quality gates reference fields "
+                    f"{sorted(unmatched)} not listed in expected_output_fields"
+                )
+
+        # Empty phase check
+        if not phase.agents and not phase.skippable:
+            result.add_warning(
+                f"Phase '{phase.id}' has no agents assigned and is not skippable"
+            )
+
+    # Skill orphan check (info-level)
+    all_agent_skills: set[str] = set()
+    for agent in profile.agents:
+        if agent.enabled:
+            all_agent_skills.update(agent.skills)
+    orphan_skills = all_agent_skills - all_required
+    if orphan_skills and all_required:
+        result.add_warning(
+            f"Agent skills {sorted(orphan_skills)} are not referenced by "
+            f"any phase's required_capabilities (may be unused)"
+        )
+
+    return result
+
+
+def _extract_gate_fields(phase: "WorkflowPhaseConfig") -> set[str]:
+    """Extract field names referenced in quality gate condition expressions."""
+    import re
+    fields: set[str] = set()
+    for gate in phase.quality_gates:
+        for condition in gate.conditions:
+            # Match identifiers before comparison operators
+            matches = re.findall(r"([a-zA-Z_]\w*)\s*[><=!]", condition.expression)
+            fields.update(matches)
+    return fields
+
+
 def validate_profile(
     profile: ProfileConfig,
     settings: SettingsConfig | None = None,
@@ -300,6 +385,7 @@ def validate_profile(
     result.merge(validate_phase_graph(profile.workflow))
     result.merge(validate_status_transitions(profile.workflow))
     result.merge(validate_governance(profile.governance))
+    result.merge(validate_capability_coverage(profile))
 
     if settings is not None:
         result.merge(validate_llm_providers(profile, settings))

@@ -1,0 +1,81 @@
+name: Content Moderation Pipeline
+description: Multi-phase content moderation
+
+statuses:
+  - id: submitted
+    name: Submitted
+    is_initial: true
+    transitions_to:
+      - analyzing
+
+  - id: analyzing
+    name: Analyzing
+    transitions_to:
+      - in_review
+      - auto_approved
+
+  - id: in_review
+    name: In Review
+    transitions_to:
+      - approved
+      - rejected
+      - escalated
+
+  - id: escalated
+    name: Escalated
+    transitions_to:
+      - approved
+      - rejected
+
+  - id: approved
+    name: Approved
+    is_terminal: true
+
+  - id: rejected
+    name: Rejected
+    is_terminal: true
+
+  - id: auto_approved
+    name: Auto-Approved
+    is_terminal: true
+
+phases:
+  - id: analysis
+    name: Sentiment Analysis
+    order: 1
+    agents:
+      - sentiment-analyzer
+    quality_gates:
+      - name: confidence-gate
+        conditions:
+          - expression: "confidence >= 0.5"
+        on_failure: warn
+    on_success: review
+    on_failure: review
+
+  - id: review
+    name: Content Review
+    order: 2
+    agents:
+      - content-reviewer
+    quality_gates:
+      - name: review-completeness
+        conditions:
+          - expression: "categories_checked >= 3"
+        on_failure: block
+    on_success: done
+    on_failure: escalation
+
+  - id: escalation
+    name: Escalation Review
+    order: 3
+    agents:
+      - escalation-handler
+    on_success: done
+    on_failure: done
+    requires_human: true
+
+  - id: done
+    name: Complete
+    order: 4
+    is_terminal: true

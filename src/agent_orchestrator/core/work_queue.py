@@ -26,6 +26,9 @@ MIN_PRIORITY = 0
 MAX_PRIORITY = 10
 DEFAULT_QUEUE_SIZE = 0  # unbounded
 
+# Terminal statuses — work items in these states are "done"
+TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
 
 class WorkItemStatus(str, Enum):
     """Status of a work item in the queue/pipeline."""
@@ -36,6 +39,23 @@ class WorkItemStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True)
+class WorkItemHistoryEntry:
+    """Immutable record of a single status transition on a work item.
+
+    Captures when the transition happened, which component triggered it,
+    and an optional reason string for governance/audit context.
+    """
+
+    timestamp: datetime
+    from_status: WorkItemStatus | None  # None for initial creation
+    to_status: WorkItemStatus
+    phase_id: str = ""
+    agent_id: str = ""
+    reason: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -65,11 +85,94 @@ class WorkItem:
     results: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
     attempt_count: int = 0
+    history: list[WorkItemHistoryEntry] = field(default_factory=list)
+    deadline: datetime | None = None
+    urgency: str = ""              # "critical" | "high" | "medium" | "low" | ""
+    sla_policy_id: str = ""
+    routing_tags: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Record the initial PENDING status in history."""
+        if not self.history:
+            self.history.append(WorkItemHistoryEntry(
+                timestamp=self.submitted_at,
+                from_status=None,
+                to_status=self.status,
+                reason="created",
+            ))
+
+    def record_transition(
+        self,
+        to_status: WorkItemStatus,
+        *,
+        phase_id: str = "",
+        agent_id: str = "",
+        reason: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Transition to a new status, recording the change in history.
+
+        Also updates timestamp fields (started_at, completed_at) as
+        appropriate for the target status.
+        """
+        now = datetime.now(timezone.utc)
+        entry = WorkItemHistoryEntry(
+            timestamp=now,
+            from_status=self.status,
+            to_status=to_status,
+            phase_id=phase_id,
+            agent_id=agent_id,
+            reason=reason,
+            metadata=metadata or {},
+        )
+        self.history.append(entry)
+        self.status = to_status
+
+        if to_status == WorkItemStatus.IN_PROGRESS and self.started_at is None:
+            self.started_at = now
+        elif to_status in (WorkItemStatus.COMPLETED, WorkItemStatus.FAILED, WorkItemStatus.CANCELLED):
+            self.completed_at = now
+
+    def duration_in_status(self, status: WorkItemStatus) -> float | None:
+        """Return seconds spent in a given status, or None if never entered.
+
+        If the item is currently in that status, measures from entry to now.
+        If the item passed through that status, measures entry to exit.
+        If the item entered the status multiple times, returns the total.
+        """
+        total = 0.0
+        entered_at: datetime | None = None
+        was_entered = False
+
+        for entry in self.history:
+            if entry.to_status == status and entered_at is None:
+                entered_at = entry.timestamp
+                was_entered = True
+            elif entry.from_status == status and entered_at is not None:
+                total += (entry.timestamp - entered_at).total_seconds()
+                entered_at = None
+
+        # Still in that status
+        if entered_at is not None and self.status == status:
+            total += (datetime.now(timezone.utc) - entered_at).total_seconds()
+
+        return total if was_entered else None
 
     def __lt__(self, other: WorkItem) -> bool:
-        """Compare by priority, then submission time."""
+        """Compare by priority, then deadline proximity, then submission time.
+
+        Items with closer deadlines sort higher when priorities are equal.
+        Items with deadlines sort before items without deadlines at same priority.
+        """
         if self.priority != other.priority:
             return self.priority < other.priority
+        # Deadline proximity as tiebreaker
+        if self.deadline is not None and other.deadline is not None:
+            return self.deadline < other.deadline
+        if self.deadline is not None:
+            return True
+        if other.deadline is not None:
+            return False
         return self.submitted_at < other.submitted_at
 
 
@@ -109,7 +212,7 @@ class WorkQueue:
             self._items[item.id] = item
             self._total_pushed += 1
 
-        item.status = WorkItemStatus.QUEUED
+        item.record_transition(WorkItemStatus.QUEUED, reason="enqueued")
         await self._queue.put(item)
         logger.debug("Queued work item '%s' (priority=%d)", item.id, item.priority)
 
@@ -134,7 +237,7 @@ class WorkQueue:
             self._items.pop(item.id, None)
             self._total_popped += 1
 
-        item.status = WorkItemStatus.IN_PROGRESS
+        item.record_transition(WorkItemStatus.IN_PROGRESS, reason="dequeued")
         logger.debug("Dequeued work item '%s'", item.id)
         return item
 

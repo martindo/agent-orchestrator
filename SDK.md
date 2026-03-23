@@ -15,13 +15,16 @@ Complete reference for configuring, deploying, and integrating with agent-orches
    - [workflow.yaml](#workflowyaml)
    - [governance.yaml](#governanceyaml)
    - [workitems.yaml](#workitemsyaml)
+   - [mcp.yaml](#mcpyaml)
 5. [LLM Provider Setup](#llm-provider-setup)
 6. [CLI Reference](#cli-reference)
 7. [REST API Reference](#rest-api-reference)
-8. [Python SDK](#python-sdk)
-9. [Built-in Profile Templates](#built-in-profile-templates)
-10. [Validation Rules](#validation-rules)
-11. [Building Apps](#building-apps)
+8. [Knowledge System](#knowledge-system)
+9. [Eval System](#eval-system)
+10. [Python SDK](#python-sdk)
+11. [Built-in Profile Templates](#built-in-profile-templates)
+12. [Validation Rules](#validation-rules)
+13. [Building Apps](#building-apps)
 
 ---
 
@@ -30,6 +33,9 @@ Complete reference for configuring, deploying, and integrating with agent-orches
 ```bash
 # Install with LLM support
 pip install -e ".[llm]"
+
+# Install with MCP support (Model Context Protocol)
+pip install -e ".[mcp]"
 
 # Initialize a workspace from a built-in template
 agent-orchestrator init --template content-moderation my-workspace
@@ -364,6 +370,67 @@ phases:
 | `entry_conditions` | list[object] | `[]` | Conditions to check before entering phase |
 | `exit_conditions` | list[object] | `[]` | Conditions to check before exiting phase |
 | `quality_gates` | list[object] | `[]` | Post-phase quality checks |
+| `timeout_seconds` | float | `0.0` | Phase wallclock timeout in seconds (`0` = no timeout). If a phase exceeds this duration, it is terminated and treated as a failure. |
+| `required_capabilities` | list[string] | `[]` | Capabilities this phase requires. Matched against agent `skills` for gap detection. If no agent in the phase has a matching skill, a capability gap is reported. |
+| `expected_output_fields` | list[string] | `[]` | Output field names that agents in this phase should produce. Used by gap detection to verify that phase outputs contain the expected data. |
+| `critic_agent` | string \| null | `null` | Agent ID of a critic that evaluates phase output after execution. When set, the critic agent receives the phase output and evaluates it against the `critic_rubric`. |
+| `critic_rubric` | string | `""` | Rubric text passed to the critic agent for evaluation. Only meaningful when `critic_agent` is set. |
+| `max_phase_retries` | int | `1` | Maximum number of re-executions when the critic rejects phase output. After exhausting retries, the phase proceeds with the best available result. |
+| `retry_backoff_seconds` | float | `1.0` | Backoff delay (in seconds) between critic-triggered re-executions. |
+
+#### Critic Evaluation Loop
+
+When `critic_agent` is set on a phase, the engine runs a post-execution evaluation loop:
+
+1. Phase agents execute and produce output.
+2. The critic agent receives the output plus the `critic_rubric` and returns a pass/fail judgment.
+3. If the critic rejects the output and `max_phase_retries` has not been exhausted, the phase re-executes after waiting `retry_backoff_seconds`.
+4. If retries are exhausted, the phase proceeds with the last output.
+
+```yaml
+phases:
+  - id: content-review
+    name: Content Review
+    order: 2
+    agents: [content-reviewer]
+    critic_agent: quality-critic
+    critic_rubric: |
+      Evaluate the review for completeness, accuracy, and adherence to policy.
+      Reject if the review misses any of the following:
+      - Sentiment classification
+      - Risk assessment
+      - Recommended action with justification
+    max_phase_retries: 3
+    retry_backoff_seconds: 2.0
+    on_success: done
+    on_failure: escalation
+```
+
+#### Capability Requirements and Gap Detection
+
+Use `required_capabilities` and `expected_output_fields` to enable automatic gap detection. The platform compares these requirements against the skills declared in `agents.yaml` and the actual outputs produced during execution:
+
+```yaml
+phases:
+  - id: analysis
+    name: Content Analysis
+    order: 1
+    agents: [sentiment-analyzer]
+    timeout_seconds: 30.0
+    required_capabilities:
+      - sentiment-analysis
+      - language-detection
+      - toxicity-scoring
+    expected_output_fields:
+      - sentiment_score
+      - language
+      - toxicity_level
+      - confidence
+    on_success: review
+    on_failure: review
+```
+
+If no agent assigned to the `analysis` phase declares `sentiment-analysis` in its `skills` list, a capability gap is detected and surfaced through the `/gaps` API. Missing `expected_output_fields` in actual phase results trigger runtime gap detection.
 
 #### Quality Gate
 
@@ -592,6 +659,79 @@ work_item_types:
 
 ---
 
+### mcp.yaml
+
+**Optional.** Configures MCP (Model Context Protocol) integration — both consuming external MCP server tools (client) and exposing platform capabilities to external AI clients (server).
+
+Requires the optional `mcp` package: `pip install "agent-orchestrator[mcp]"`
+
+```yaml
+# Client: connect to external MCP servers
+client:
+  servers:
+    - server_id: github
+      display_name: GitHub MCP Server
+      transport: stdio                    # stdio | streamable_http | sse
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-github"]
+      env:
+        GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_TOKEN}"
+      capability_type_override: repository  # maps to CapabilityType enum
+      auto_connect: true
+
+    - server_id: custom-api
+      display_name: Custom API Bridge
+      transport: streamable_http
+      url: "http://localhost:8080/mcp"
+      credential_env_var: CUSTOM_API_TOKEN
+      headers:
+        X-Custom-Header: "value"
+
+  default_capability_type: external_api   # fallback CapabilityType
+  tool_prefix: mcp                        # provider ID prefix
+
+# Server: expose platform capabilities via MCP
+server:
+  enabled: true
+  mount_path: "/mcp"                      # ASGI mount path on FastAPI
+  session_ttl_seconds: 3600
+  max_sessions: 100
+  audit_all_invocations: true
+```
+
+#### Client Configuration
+
+Each MCP server entry discovers tools on connect and registers them as `ConnectorProviderProtocol` providers in the `ConnectorRegistry` — giving them the same permission checks, contract validation, and audit logging as native connectors.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `server_id` | string | *required* | Unique identifier |
+| `display_name` | string | *required* | Human-readable name |
+| `transport` | enum | *required* | `stdio`, `streamable_http`, or `sse` |
+| `url` | string | `null` | URL for HTTP transports |
+| `command` | string | `null` | Command for stdio transport |
+| `args` | list[string] | `[]` | Command arguments for stdio |
+| `env` | dict | `{}` | Environment variables (`${VAR}` references resolved) |
+| `credential_env_var` | string | `null` | Env var name for Bearer token |
+| `headers` | dict | `{}` | Extra HTTP headers |
+| `auto_connect` | bool | `true` | Connect on engine start |
+| `capability_type_override` | string | `null` | Override CapabilityType mapping |
+| `enabled` | bool | `true` | Enable/disable this server |
+
+#### Server Configuration
+
+When enabled, the MCP server is mounted as an ASGI app on FastAPI. It dynamically generates tools from registered connectors and exposes engine status, work items, audit records, and agent prompts.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable MCP server |
+| `mount_path` | string | `"/mcp"` | ASGI mount path |
+| `session_ttl_seconds` | int | `3600` | Session time-to-live |
+| `max_sessions` | int | `100` | Maximum concurrent sessions |
+| `audit_all_invocations` | bool | `true` | Audit every MCP tool call |
+
+---
+
 ## LLM Provider Setup
 
 The engine auto-registers providers at startup based on what API keys and SDKs are available. Missing SDKs are skipped with a warning.
@@ -718,7 +858,7 @@ agent-orchestrator submit --title "Review this" --type-id task [--priority 5] [-
 agent-orchestrator submit --file workitem.json [--workspace .]
 
 # Start REST API server
-agent-orchestrator serve [--workspace .] [--host 0.0.0.0] [--port 8000]
+agent-orchestrator serve [--workspace .] [--host 0.0.0.0] [--port 8000] [--mcp]
 
 # Export workspace config as ZIP
 agent-orchestrator export WORKSPACE [--output workspace-export.zip]
@@ -1039,6 +1179,671 @@ curl "http://localhost:8000/api/v1/config/profile/export?component=agents"
 # Validate configuration
 curl -X POST http://localhost:8000/api/v1/config/validate
 # {"is_valid": true, "errors": [], "warnings": []}
+```
+
+### Knowledge
+
+Memory record management for the knowledge subsystem. Supports CRUD, querying, versioning via supersede chains, and aggregate statistics.
+
+| Method | Path | Description | Status |
+|--------|------|-------------|--------|
+| `GET` | `/knowledge` | Query memory records with filters | 200 |
+| `POST` | `/knowledge` | Store a new memory record | 200 |
+| `GET` | `/knowledge/{memory_id}` | Get a memory record by ID | 200 / 404 |
+| `DELETE` | `/knowledge/{memory_id}` | Soft-delete a memory record | 200 / 404 |
+| `POST` | `/knowledge/{memory_id}/supersede` | Create a new version superseding an existing record | 200 / 404 |
+| `GET` | `/knowledge/stats` | Summary statistics grouped by memory type | 200 |
+
+**Query parameters for `GET /knowledge`:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `type` | string | `null` | Memory type filter (`evidence`, `decision`, `strategy`, `artifact`, `conversation`) |
+| `tags` | string | `null` | Comma-separated tag filter |
+| `keywords` | string | `null` | Comma-separated keyword filter |
+| `min_confidence` | float | `0.0` | Minimum confidence threshold |
+| `limit` | int | `20` | Maximum records to return |
+
+```bash
+# Query all evidence records with high confidence
+curl "http://localhost:8000/api/v1/knowledge?type=evidence&min_confidence=0.8"
+
+# Store a new memory record
+curl -X POST http://localhost:8000/api/v1/knowledge \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "decision",
+    "title": "Approved moderation policy v2",
+    "content": {"policy_version": "2.0", "approved_by": "admin"},
+    "tags": ["policy", "moderation"],
+    "confidence": 0.95
+  }'
+# {"memory_id": "abc-123", "content_hash": "sha256..."}
+
+# Supersede an existing record with a new version
+curl -X POST http://localhost:8000/api/v1/knowledge/abc-123/supersede \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "decision",
+    "title": "Approved moderation policy v3",
+    "content": {"policy_version": "3.0", "approved_by": "admin"},
+    "tags": ["policy", "moderation"],
+    "confidence": 0.98
+  }'
+
+# Get statistics
+curl http://localhost:8000/api/v1/knowledge/stats
+# {"evidence": {"count": 12}, "decision": {"count": 5}, ...}
+```
+
+### Lineage
+
+Full provenance tracing for work items across all data sources (history, decisions, artifacts, audit).
+
+| Method | Path | Description | Status |
+|--------|------|-------------|--------|
+| `GET` | `/work-items/{work_item_id}/lineage` | Full chronological lineage from all sources | 200 |
+| `GET` | `/work-items/{work_item_id}/decisions` | Decision chain for a work item | 200 |
+| `GET` | `/work-items/{work_item_id}/artifacts` | Artifact chain for a work item | 200 |
+
+```bash
+# Get full lineage for a work item
+curl http://localhost:8000/api/v1/work-items/item-001/lineage
+# {
+#   "work_item_id": "item-001",
+#   "total_events": 8,
+#   "decision_chain_valid": true,
+#   "artifact_count": 3,
+#   "events": [...]
+# }
+
+# Get decision chain
+curl http://localhost:8000/api/v1/work-items/item-001/decisions
+# {"work_item_id": "item-001", "decisions": [...], "chain_valid": true, "total": 4}
+
+# Get artifact chain
+curl http://localhost:8000/api/v1/work-items/item-001/artifacts
+# {"work_item_id": "item-001", "artifacts": [...], "total": 2}
+```
+
+### Decision Ledger
+
+Tamper-evident cryptographic decision chain. Every governance decision, agent action, and state transition is recorded with hash-chain integrity.
+
+| Method | Path | Description | Status |
+|--------|------|-------------|--------|
+| `GET` | `/ledger/decisions` | Query decision records with filters | 200 |
+| `GET` | `/ledger/decisions/chain/{work_item_id}` | Complete decision chain for a work item | 200 / 404 |
+| `GET` | `/ledger/decisions/agent/{agent_id}` | Recent decisions by a specific agent | 200 |
+| `GET` | `/ledger/verify` | Verify chain integrity (recomputes all hashes) | 200 |
+| `GET` | `/ledger/summary` | Summary statistics for the ledger | 200 |
+
+**Query parameters for `GET /ledger/decisions`:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `work_item_id` | string | `null` | Filter by work item |
+| `agent_id` | string | `null` | Filter by agent |
+| `decision_type` | string | `null` | Filter by decision type |
+| `outcome` | string | `null` | Filter by outcome |
+| `phase_id` | string | `null` | Filter by phase |
+| `run_id` | string | `null` | Filter by run |
+| `app_id` | string | `null` | Filter by application |
+| `limit` | int | `100` | Maximum records to return |
+
+```bash
+# Query decisions for a specific work item
+curl "http://localhost:8000/api/v1/ledger/decisions?work_item_id=item-001"
+
+# Get the full decision chain (chronological)
+curl http://localhost:8000/api/v1/ledger/decisions/chain/item-001
+
+# Verify chain integrity
+curl http://localhost:8000/api/v1/ledger/verify
+# {"chain_valid": true, "records_verified": 127, "status": "intact"}
+
+# Ledger summary
+curl http://localhost:8000/api/v1/ledger/summary
+```
+
+### Gaps and Synthesis
+
+Automatic capability gap detection and agent synthesis. The platform detects gaps between phase requirements (`required_capabilities`, `expected_output_fields`) and actual agent skills, then proposes new agents to fill them.
+
+| Method | Path | Description | Status |
+|--------|------|-------------|--------|
+| `GET` | `/gaps` | List all detected capability gaps | 200 |
+| `GET` | `/gaps/summary` | Aggregated gap statistics by phase, severity, source | 200 |
+| `GET` | `/gaps/{gap_id}` | Get details of a specific gap | 200 / 404 |
+| `POST` | `/synthesis/propose` | Generate a synthesis proposal for a gap | 200 / 404 |
+| `GET` | `/synthesis/proposals` | List synthesis proposals (optionally filter by status) | 200 |
+| `POST` | `/synthesis/proposals/{proposal_id}/test` | Run pre-deployment validation on a proposal | 200 |
+| `POST` | `/synthesis/proposals/{proposal_id}/approve` | Approve, validate, and deploy a synthesized agent | 200 / 422 |
+| `POST` | `/synthesis/proposals/{proposal_id}/reject` | Reject a proposal with optional feedback | 200 / 404 |
+
+```bash
+# List all detected gaps
+curl http://localhost:8000/api/v1/gaps
+# [{"id": "gap-1", "phase_id": "analysis", "severity": "high", ...}]
+
+# Get gap summary
+curl http://localhost:8000/api/v1/gaps/summary
+# {"total_gaps": 3, "by_phase": {"analysis": 2}, "by_severity": {"high": 1, "medium": 2}, ...}
+
+# Propose a new agent to fill a gap
+curl -X POST http://localhost:8000/api/v1/synthesis/propose \
+  -H "Content-Type: application/json" \
+  -d '{"gap_id": "gap-1"}'
+# {"id": "proposal-abc", "gap_id": "gap-1", "agent_spec": {...}, "confidence": 0.85, ...}
+
+# Test a proposal before deploying
+curl -X POST http://localhost:8000/api/v1/synthesis/proposals/proposal-abc/test
+# {"passed": true, "proposal_id": "proposal-abc", "checks": {"schema": "pass", "probe": "pass"}}
+
+# Approve and deploy (runs validation first)
+curl -X POST http://localhost:8000/api/v1/synthesis/proposals/proposal-abc/approve
+
+# Reject with feedback
+curl -X POST http://localhost:8000/api/v1/synthesis/proposals/proposal-abc/reject \
+  -H "Content-Type: application/json" \
+  -d '{"feedback": "System prompt needs more specificity for toxicity detection."}'
+```
+
+### Capability Catalog
+
+Service catalog for registering, discovering, and invoking capabilities. Each capability maps to a workflow profile and can be invoked to create work items.
+
+| Method | Path | Description | Status |
+|--------|------|-------------|--------|
+| `GET` | `/catalog/capabilities` | List/discover capabilities with filters | 200 |
+| `GET` | `/catalog/capabilities/{capability_id}` | Get a capability by ID | 200 / 404 |
+| `POST` | `/catalog/capabilities` | Register a new capability | 201 |
+| `PUT` | `/catalog/capabilities/{capability_id}` | Update a capability registration | 200 / 404 |
+| `DELETE` | `/catalog/capabilities/{capability_id}` | Unregister a capability | 200 / 404 |
+| `POST` | `/catalog/capabilities/{capability_id}/invoke` | Invoke a capability (creates a work item) | 200 / 404 |
+| `GET` | `/catalog/summary` | Registry summary statistics | 200 |
+
+**Query parameters for `GET /catalog/capabilities`:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `tags` | string | `null` | Comma-separated tag filter |
+| `status` | string | `null` | Lifecycle state filter (`draft`, `active`, `deprecated`, `archived`) |
+| `profile_name` | string | `null` | Filter by profile |
+
+```bash
+# List all active capabilities
+curl "http://localhost:8000/api/v1/catalog/capabilities?status=active"
+
+# Register a capability
+curl -X POST http://localhost:8000/api/v1/catalog/capabilities \
+  -H "Content-Type: application/json" \
+  -d '{
+    "capability_id": "content-moderation",
+    "display_name": "Content Moderation",
+    "description": "Moderate user-generated content for policy violations",
+    "profile_name": "content-moderation",
+    "tags": ["moderation", "safety"],
+    "input_schema": {
+      "required": ["content_text"],
+      "properties": {
+        "content_text": {"type": "string"},
+        "content_type": {"type": "string"}
+      }
+    },
+    "security_classification": "internal",
+    "memory_usage_policy": "read_write",
+    "invocation_modes": ["async"],
+    "status": "active"
+  }'
+
+# Invoke a capability (creates a work item and submits it)
+curl -X POST http://localhost:8000/api/v1/catalog/capabilities/content-moderation/invoke \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": {"content_text": "Review this post", "content_type": "post"},
+    "title": "Moderate post #42",
+    "priority": 3
+  }'
+# {"work_id": "abc-123", "capability_id": "content-moderation", "status": "submitted"}
+
+# Registry summary
+curl http://localhost:8000/api/v1/catalog/summary
+```
+
+### Skill Map
+
+Organizational skill registry tracking which agents have which skills, with execution metrics, maturity levels, and coverage analysis.
+
+| Method | Path | Description | Status |
+|--------|------|-------------|--------|
+| `GET` | `/skills` | List/discover skills with filters | 200 |
+| `GET` | `/skills/{skill_id}` | Get a skill by ID | 200 / 404 |
+| `POST` | `/skills` | Register a new skill | 201 |
+| `DELETE` | `/skills/{skill_id}` | Unregister a skill | 200 / 404 |
+| `POST` | `/skills/{skill_id}/record` | Record an execution observation | 200 / 404 |
+| `GET` | `/skills/coverage/report` | Organizational skill coverage report | 200 |
+| `GET` | `/skills/agent/{agent_id}/profile` | Agent performance profile across all skills | 200 |
+| `GET` | `/skills/summary` | Summary statistics for the skill map | 200 |
+
+**Query parameters for `GET /skills`:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `tags` | string | `null` | Comma-separated tag filter |
+| `agent_id` | string | `null` | Filter by agent providing the skill |
+| `min_success_rate` | float | `null` | Minimum success rate filter |
+| `maturity` | string | `null` | Maturity level filter (`novice`, `developing`, `proficient`, `expert`) |
+
+```bash
+# List all skills
+curl http://localhost:8000/api/v1/skills
+
+# Register a skill
+curl -X POST http://localhost:8000/api/v1/skills \
+  -H "Content-Type: application/json" \
+  -d '{
+    "skill_id": "sentiment-analysis",
+    "name": "Sentiment Analysis",
+    "description": "Classify text sentiment as positive, negative, or neutral",
+    "tags": ["nlp", "classification"],
+    "agent_ids": ["sentiment-analyzer"],
+    "phase_ids": ["analysis"]
+  }'
+
+# Record a skill execution
+curl -X POST http://localhost:8000/api/v1/skills/sentiment-analysis/record \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_id": "sentiment-analyzer",
+    "success": true,
+    "confidence": 0.92,
+    "duration_seconds": 1.5
+  }'
+
+# Get coverage report
+curl http://localhost:8000/api/v1/skills/coverage/report
+# {
+#   "total_skills": 10, "covered_skills": 8, "coverage_ratio": 0.8,
+#   "weak_skills": ["toxicity-scoring"], "strong_skills": ["sentiment-analysis"],
+#   "unassigned_skills": ["image-analysis"], "maturity_distribution": {...}
+# }
+
+# Get an agent's skill profile
+curl http://localhost:8000/api/v1/skills/agent/sentiment-analyzer/profile
+```
+
+### Eval (Evaluation System)
+
+LLM-as-judge evaluation, rubric management, A/B testing, and evaluation dataset CRUD.
+
+| Method | Path | Description | Status |
+|--------|------|-------------|--------|
+| `POST` | `/evals/evaluate` | Run an LLM-as-judge evaluation | 200 |
+| `GET` | `/evals/rubrics` | List all evaluation rubrics | 200 |
+| `POST` | `/evals/rubrics` | Create a new rubric | 201 |
+| `GET` | `/evals/rubrics/{rubric_id}` | Get a rubric by ID | 200 / 404 |
+| `DELETE` | `/evals/rubrics/{rubric_id}` | Delete a rubric | 200 / 404 |
+| `POST` | `/evals/ab-test` | Run an A/B test comparing two workflow variants | 201 |
+| `GET` | `/evals/datasets` | List all evaluation datasets | 200 |
+| `POST` | `/evals/datasets` | Create an evaluation dataset | 201 |
+| `GET` | `/evals/datasets/{dataset_id}` | Get a dataset by ID | 200 / 404 |
+| `DELETE` | `/evals/datasets/{dataset_id}` | Delete a dataset | 200 / 404 |
+
+```bash
+# Create a rubric
+curl -X POST http://localhost:8000/api/v1/evals/rubrics \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Moderation Quality",
+    "description": "Evaluate moderation review quality",
+    "dimensions": [
+      {"name": "completeness", "description": "All required fields present", "weight": 1.0},
+      {"name": "accuracy", "description": "Correct classification", "weight": 2.0},
+      {"name": "reasoning", "description": "Clear justification provided", "weight": 1.5}
+    ],
+    "system_prompt": "You are a quality evaluator for content moderation reviews."
+  }'
+
+# Run an evaluation
+curl -X POST http://localhost:8000/api/v1/evals/evaluate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rubric_id": "rubric-abc123",
+    "agent_output": {
+      "sentiment": "negative",
+      "risk_level": "high",
+      "recommendation": "reject",
+      "reasoning": "Contains policy-violating language."
+    },
+    "context": {"content_text": "The original content to evaluate against"},
+    "agent_id": "content-reviewer",
+    "phase_id": "review"
+  }'
+
+# Run an A/B test
+curl -X POST http://localhost:8000/api/v1/evals/ab-test \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "GPT-4o vs Claude comparison",
+    "variant_a": {"provider": "openai", "model": "gpt-4o"},
+    "variant_b": {"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
+    "dataset_id": "dataset-xyz",
+    "max_items": 50
+  }'
+
+# Create an evaluation dataset
+curl -X POST http://localhost:8000/api/v1/evals/datasets \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Moderation test set v1",
+    "description": "Golden test set for moderation quality",
+    "items": [
+      {"content_text": "Sample safe content", "expected_label": "safe"},
+      {"content_text": "Sample unsafe content", "expected_label": "unsafe"}
+    ],
+    "tags": ["moderation", "golden-set"]
+  }'
+```
+
+### Benchmarks
+
+Regression testing via benchmark suites. Define expected outcomes, run them against the current workflow, and track pass rates over time.
+
+| Method | Path | Description | Status |
+|--------|------|-------------|--------|
+| `GET` | `/benchmarks/suites` | List all benchmark suites | 200 |
+| `POST` | `/benchmarks/suites` | Create a benchmark suite | 201 |
+| `GET` | `/benchmarks/suites/{suite_id}` | Get a suite with full case details | 200 / 404 |
+| `DELETE` | `/benchmarks/suites/{suite_id}` | Delete a benchmark suite | 200 / 404 |
+| `POST` | `/benchmarks/suites/{suite_id}/run` | Execute a benchmark suite | 201 / 404 |
+| `GET` | `/benchmarks/suites/{suite_id}/runs` | List run results for a suite | 200 |
+| `POST` | `/benchmarks/suites/from-history` | Create a suite from completed work items | 201 |
+| `GET` | `/benchmarks/runs/{run_id}` | Get a detailed run result | 200 / 404 |
+
+```bash
+# Create a benchmark suite
+curl -X POST http://localhost:8000/api/v1/benchmarks/suites \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Moderation regression tests",
+    "description": "Core moderation accuracy benchmarks",
+    "profile_name": "content-moderation",
+    "cases": [
+      {
+        "case_id": "safe-post",
+        "work_item_data": {"content_text": "Beautiful weather today!"},
+        "expected_status": "completed",
+        "expected_min_confidence": 0.8,
+        "expected_output_keys": ["sentiment", "risk_level"]
+      },
+      {
+        "case_id": "spam-post",
+        "work_item_data": {"content_text": "Buy cheap watches now!!!"},
+        "expected_status": "completed",
+        "expected_min_confidence": 0.7,
+        "tags": ["spam"]
+      }
+    ],
+    "tags": ["regression", "core"]
+  }'
+
+# Run the suite
+curl -X POST http://localhost:8000/api/v1/benchmarks/suites/suite-abc123/run
+# {"run_id": "run-xyz", "passed": 2, "failed": 0, "pass_rate": 1.0, ...}
+
+# Create a suite from historical completed work items
+curl -X POST http://localhost:8000/api/v1/benchmarks/suites/from-history \
+  -H "Content-Type: application/json" \
+  -d '{"suite_name": "Historical baseline", "min_confidence": 0.7}'
+
+# Get a specific run result
+curl http://localhost:8000/api/v1/benchmarks/runs/run-xyz
+```
+
+### Simulation
+
+What-if analysis for workflow changes. Replay historical work items through modified workflows and compare outcomes.
+
+| Method | Path | Description | Status |
+|--------|------|-------------|--------|
+| `GET` | `/simulations` | List all simulation results | 200 |
+| `POST` | `/simulations` | Run a simulation with inline historical data | 201 |
+| `GET` | `/simulations/{simulation_id}` | Get simulation with per-item comparisons | 200 / 404 |
+| `POST` | `/simulations/{simulation_id}/cancel` | Cancel a running simulation | 200 / 404 |
+| `POST` | `/simulations/replay` | Replay historical items from persistent store | 201 |
+| `GET` | `/simulations/summary` | Summary statistics for all simulations | 200 |
+
+```bash
+# Run a dry-run simulation (no LLM calls)
+curl -X POST http://localhost:8000/api/v1/simulations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Test new rubric",
+    "dry_run": true,
+    "historical_items": [
+      {"id": "item-1", "data": {"content_text": "Test"}, "status": "completed", "confidence": 0.85},
+      {"id": "item-2", "data": {"content_text": "Another"}, "status": "completed", "confidence": 0.72}
+    ]
+  }'
+# {
+#   "simulation_id": "sim-abc",
+#   "items_processed": 2,
+#   "improvement_rate": 0.0,
+#   "regression_rate": 0.0,
+#   "comparisons": [...]
+# }
+
+# Replay from the persistent work item store
+curl -X POST http://localhost:8000/api/v1/simulations/replay \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Full replay",
+    "status_filter": "completed",
+    "max_items": 100,
+    "dry_run": false
+  }'
+
+# Get simulation summary
+curl http://localhost:8000/api/v1/simulations/summary
+```
+
+---
+
+## Knowledge System
+
+The knowledge subsystem provides persistent memory for agents. Memory records are created automatically during workflow execution (when agents produce outputs) and can also be managed explicitly via the REST API.
+
+### Memory Types
+
+| Type | Description |
+|------|-------------|
+| `evidence` | Factual observations extracted during analysis |
+| `decision` | Governance or agent decisions with rationale |
+| `strategy` | Learned strategies or patterns |
+| `artifact` | References to generated artifacts |
+| `conversation` | Conversation fragments or summaries |
+
+### How Memory Injection Works
+
+During phase execution, the engine automatically queries the knowledge store for relevant prior memories and injects them into the agent's context. This allows agents to learn from prior decisions without re-deriving knowledge.
+
+The injection flow:
+
+1. Before an agent executes, the engine queries the knowledge store using the work item's type, tags, and phase context.
+2. Matching records (scored by tag overlap and confidence) are serialized and appended to the agent's prompt as prior context.
+3. After execution, if the agent produces structured output with a confidence score, the engine stores a new memory record automatically.
+
+### Memory Record Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `memory_id` | string | Unique identifier |
+| `memory_type` | string | One of the memory types above |
+| `title` | string | Human-readable title |
+| `content` | object | Arbitrary structured content |
+| `content_hash` | string | SHA-256 hash of content for deduplication |
+| `tags` | list[string] | Searchable tags |
+| `confidence` | float | Confidence score (0.0 to 1.0) |
+| `source_agent_id` | string | Agent that created the record |
+| `source_work_id` | string | Work item that triggered creation |
+| `source_phase_id` | string | Phase during which it was created |
+| `source_run_id` | string | Engine run ID |
+| `app_id` | string | Application namespace |
+| `timestamp` | datetime | Creation timestamp |
+| `expires_at` | datetime \| null | Optional expiration |
+| `superseded_by` | string \| null | ID of the record that replaced this one |
+| `version` | int | Version number (incremented on supersede) |
+| `metadata` | object | Arbitrary metadata |
+
+### Versioning via Supersede
+
+When knowledge evolves, use the supersede endpoint rather than deleting old records. This preserves the full version history:
+
+```bash
+# Original record
+curl -X POST http://localhost:8000/api/v1/knowledge \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "strategy",
+    "title": "Spam detection heuristic v1",
+    "content": {"rules": ["keyword_density > 0.3", "link_count > 5"]},
+    "tags": ["spam", "heuristic"],
+    "confidence": 0.75
+  }'
+# Returns: {"memory_id": "mem-001", ...}
+
+# Supersede with improved version
+curl -X POST http://localhost:8000/api/v1/knowledge/mem-001/supersede \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "strategy",
+    "title": "Spam detection heuristic v2",
+    "content": {"rules": ["keyword_density > 0.3", "link_count > 5", "suspicious_domain == true"]},
+    "tags": ["spam", "heuristic"],
+    "confidence": 0.88
+  }'
+# Old record now has superseded_by set; new record has version=2
+```
+
+---
+
+## Eval System
+
+The evaluation system provides structured quality assessment of agent outputs using LLM-as-judge, A/B testing for comparing workflow variants, and dataset management for reproducible evaluation.
+
+### Creating Rubrics
+
+A rubric defines the dimensions and criteria by which agent output is evaluated. Each dimension has a name, description, and weight that determines its influence on the aggregate score.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/evals/rubrics \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Content Review Quality",
+    "description": "Evaluates the quality of content moderation reviews",
+    "dimensions": [
+      {
+        "name": "completeness",
+        "description": "Does the review address all required aspects (sentiment, risk, recommendation)?",
+        "weight": 1.0
+      },
+      {
+        "name": "accuracy",
+        "description": "Is the classification correct given the input content?",
+        "weight": 2.0
+      },
+      {
+        "name": "reasoning",
+        "description": "Is the justification clear, specific, and well-supported?",
+        "weight": 1.5
+      }
+    ],
+    "system_prompt": "You are an expert evaluator of content moderation decisions. Score each dimension 0-1."
+  }'
+```
+
+### Running Evaluations
+
+Pass an agent's output and the original context to get per-dimension scores and an aggregate:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/evals/evaluate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rubric_id": "rubric-abc123",
+    "agent_output": {
+      "sentiment": "negative",
+      "risk_level": "high",
+      "recommendation": "reject",
+      "reasoning": "The content contains explicit policy violations in sections 2 and 4."
+    },
+    "context": {
+      "content_text": "The original user-submitted content...",
+      "content_type": "post"
+    },
+    "agent_id": "content-reviewer",
+    "phase_id": "review",
+    "work_id": "item-001"
+  }'
+```
+
+The response includes per-dimension scores and a weighted aggregate:
+
+```json
+{
+  "rubric_id": "rubric-abc123",
+  "aggregate_score": 0.87,
+  "dimension_scores": {
+    "completeness": 0.95,
+    "accuracy": 0.85,
+    "reasoning": 0.80
+  },
+  "agent_id": "content-reviewer",
+  "phase_id": "review",
+  "work_id": "item-001"
+}
+```
+
+### A/B Testing
+
+Compare two workflow variants against the same dataset to determine which performs better:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/evals/ab-test \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "GPT-4o vs Claude Sonnet comparison",
+    "variant_a": {"provider": "openai", "model": "gpt-4o"},
+    "variant_b": {"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
+    "dataset_id": "dataset-moderation-v1",
+    "max_items": 100
+  }'
+```
+
+The response includes per-variant metrics and a winner determination.
+
+### Evaluation Datasets
+
+Datasets are reusable collections of work items used for consistent evaluation and A/B testing:
+
+```bash
+# Create a dataset from explicit items
+curl -X POST http://localhost:8000/api/v1/evals/datasets \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Moderation golden set v1",
+    "description": "Hand-labeled test cases for moderation accuracy",
+    "items": [
+      {"content_text": "Friendly greeting", "expected_label": "safe", "confidence": 1.0},
+      {"content_text": "Threatening message", "expected_label": "unsafe", "confidence": 1.0}
+    ],
+    "tags": ["moderation", "golden-set", "v1"]
+  }'
+
+# List datasets
+curl http://localhost:8000/api/v1/evals/datasets
+# [{"dataset_id": "dataset-abc", "name": "Moderation golden set v1", "item_count": 2, ...}]
 ```
 
 ---
@@ -1404,3 +2209,4 @@ See [docs/EXTENSION_POINTS.md](docs/EXTENSION_POINTS.md) for detailed documentat
 2. **Event bus subscriptions** — react to engine events
 3. **Custom LLM providers** — implement `LLMProviderProtocol`
 4. **Connectors & contracts** — register capability providers
+5. **MCP integration** — consume external MCP server tools or expose platform capabilities via MCP

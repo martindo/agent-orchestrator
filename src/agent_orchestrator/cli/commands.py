@@ -401,7 +401,8 @@ def submit(workspace: str, file: str | None, title: str | None, type_id: str, pr
 @click.option("--workspace", "-w", type=click.Path(exists=True), default=".")
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=8000, help="Bind port")
-def serve(workspace: str, host: str, port: int) -> None:
+@click.option("--mcp", "mcp_enabled", is_flag=True, default=False, help="Enable MCP server (overrides config)")
+def serve(workspace: str, host: str, port: int, mcp_enabled: bool) -> None:
     """Start the REST API server."""
     workspace_path = Path(workspace).resolve()
     _setup_logging()
@@ -415,6 +416,21 @@ def serve(workspace: str, host: str, port: int) -> None:
         engine = OrchestrationEngine(mgr_serve)
     except Exception:
         engine = None
+
+    # If --mcp flag is set, inject MCP server config into profile
+    if mcp_enabled and engine is not None:
+        try:
+            from agent_orchestrator.mcp.models import MCPProfileConfig, MCPServerHostConfig
+            profile = mgr_serve.get_profile()
+            if getattr(profile, "mcp", None) is None:
+                mcp_config = MCPProfileConfig(
+                    server=MCPServerHostConfig(enabled=True),
+                )
+                # Update profile with MCP config enabled
+                engine._config._profile = profile.model_copy(update={"mcp": mcp_config})
+                click.echo("MCP server enabled via --mcp flag")
+        except ImportError:
+            click.echo("Warning: MCP package not installed, --mcp flag ignored", err=True)
 
     app = create_app(workspace_path, engine=engine)
     click.echo(f"Starting API server on {host}:{port}")

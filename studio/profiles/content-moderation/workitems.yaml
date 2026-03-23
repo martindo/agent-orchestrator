@@ -1,0 +1,37 @@
+work_item_types:
+  - id: content-submission
+    name: Content Submission
+    description: User-generated content for moderation
+    custom_fields:
+      - name: content_text
+        type: text
+        required: true
+      - name: content_type
+        type: enum
+        required: true
+        values:
+          - post
+          - comment
+          - message
+      - name: author_id
+        type: string
+        required: true
+    artifact_types:
+      - id: sentiment-report
+        name: Sentiment Report
+        file_extensions:
+          - .json
+
+  - id: moderation-appeal
+    name: Moderation Appeal
+    description: Appeal of a moderation decision
+    custom_fields:
+      - name: original_decision
+        type: enum
+        required: true
+        values:
+          - approved
+          - rejected
+      - name: appeal_reason
+        type: text
+        required: true

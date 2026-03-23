@@ -1,13 +1,18 @@
-"""Connector execution trace store — thread-safe in-memory ring buffer."""
+"""Connector execution trace store — thread-safe in-memory ring buffer with optional persistence."""
 from __future__ import annotations
 
+import json
+import logging
 import threading
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
 from .models import CapabilityType, ConnectorCostInfo, ConnectorStatus
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectorExecutionTrace(BaseModel, frozen=True):
@@ -36,12 +41,44 @@ class ConnectorTraceStore:
     """Thread-safe ring-buffer store for connector execution traces.
 
     Keeps up to max_entries traces (oldest evicted first).
+    Optionally persists traces to a JSONL file on disk.
     """
 
-    def __init__(self, max_entries: int = 1000) -> None:
+    def __init__(
+        self,
+        max_entries: int = 1000,
+        persistence_path: Path | None = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._traces: list[ConnectorExecutionTrace] = []
         self._max_entries = max_entries
+        self._persistence_path = persistence_path
+
+        if self._persistence_path is not None:
+            self._load_from_disk()
+
+    def _load_from_disk(self) -> None:
+        """Load existing traces from persistence file into ring buffer."""
+        if self._persistence_path is None or not self._persistence_path.exists():
+            return
+        try:
+            with self._persistence_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        trace = ConnectorExecutionTrace(**data)
+                        self._traces.append(trace)
+                    except Exception:
+                        logger.debug("Skipping malformed trace line", exc_info=True)
+            # Trim to max size
+            if len(self._traces) > self._max_entries:
+                self._traces = self._traces[-self._max_entries:]
+            logger.info("Loaded %d traces from %s", len(self._traces), self._persistence_path)
+        except Exception:
+            logger.warning("Failed to load traces from disk", exc_info=True)
 
     def record(self, trace: ConnectorExecutionTrace) -> None:
         """Add a trace to the store, evicting oldest if at capacity."""
@@ -49,6 +86,15 @@ class ConnectorTraceStore:
             self._traces.append(trace)
             if len(self._traces) > self._max_entries:
                 self._traces = self._traces[-self._max_entries:]
+
+        # Persist to disk (outside lock to minimize contention)
+        if self._persistence_path is not None:
+            try:
+                self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
+                with self._persistence_path.open("a", encoding="utf-8") as f:
+                    f.write(trace.model_dump_json() + "\n")
+            except Exception:
+                logger.debug("Failed to persist trace to disk", exc_info=True)
 
     def query(
         self,

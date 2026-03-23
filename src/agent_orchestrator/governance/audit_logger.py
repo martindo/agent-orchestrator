@@ -34,6 +34,7 @@ class RecordType(str, Enum):
     ERROR = "error"
     CONFIG_CHANGE = "config_change"
     SYSTEM_EVENT = "system_event"
+    MCP_INVOCATION = "mcp_invocation"
 
 
 @dataclass
@@ -67,13 +68,14 @@ class AuditLogger:
     the hash of the previous record for chain integrity.
     """
 
-    def __init__(self, audit_dir: Path) -> None:
+    def __init__(self, audit_dir: Path, max_file_bytes: int = 10_485_760) -> None:
         self._dir = audit_dir
         self._dir.mkdir(parents=True, exist_ok=True)
         self._ledger_path = self._dir / "ledger.jsonl"
         self._lock = threading.Lock()
         self._sequence = 0
         self._last_hash = ""
+        self._max_file_bytes = max_file_bytes
 
         # Initialize from existing ledger
         self._load_state()
@@ -153,7 +155,8 @@ class AuditLogger:
         return hashlib.sha256(data_str.encode()).hexdigest()[:16]
 
     def _write_record(self, record: AuditRecord) -> None:
-        """Append a record to the JSONL file."""
+        """Append a record to the JSONL file, rotating if needed."""
+        self._maybe_rotate()
         record_dict = asdict(record)
         record_dict["record_type"] = record.record_type.value
         try:
@@ -162,6 +165,29 @@ class AuditLogger:
         except OSError as e:
             msg = f"Failed to write audit record: {e}"
             raise PersistenceError(msg) from e
+
+    def _maybe_rotate(self) -> None:
+        """Rotate the ledger file if it exceeds the max size."""
+        if not self._ledger_path.exists():
+            return
+        try:
+            file_size = self._ledger_path.stat().st_size
+        except OSError:
+            return
+        if file_size >= self._max_file_bytes:
+            self._rotate_file()
+
+    def _rotate_file(self) -> None:
+        """Rename the current ledger file with a timestamp suffix."""
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        rotated_name = f"{self._ledger_path.stem}.{timestamp}.jsonl"
+        rotated_path = self._dir / rotated_name
+        try:
+            self._ledger_path.rename(rotated_path)
+            self._last_hash = ""
+            logger.info("Rotated audit log to %s", rotated_path)
+        except OSError as e:
+            logger.error("Failed to rotate audit log: %s", e, exc_info=True)
 
     def query(
         self,

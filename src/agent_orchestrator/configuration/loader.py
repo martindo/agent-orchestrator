@@ -43,6 +43,7 @@ WORKFLOW_FILENAME = "workflow.yaml"
 GOVERNANCE_FILENAME = "governance.yaml"
 WORKITEMS_FILENAME = "workitems.yaml"
 APP_MANIFEST_FILENAME = "app.yaml"
+MCP_FILENAME = "mcp.yaml"
 PROFILES_DIR_NAME = "profiles"
 SUPPORTED_YAML_EXTENSIONS = frozenset({".yaml", ".yml"})
 SUPPORTED_JSON_EXTENSIONS = frozenset({".json"})
@@ -325,17 +326,142 @@ def _load_workflow(profile_dir: Path) -> WorkflowConfig:
         raise ConfigurationError(msg) from e
 
 
+def _migrate_policy(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate a legacy policy dict to the current PolicyConfig schema.
+
+    Handles the old format where policies used ``rule.expression`` and
+    ``message`` instead of ``conditions`` and ``tags``.  New-format
+    policies pass through unchanged.
+
+    Args:
+        raw: Raw policy dict from YAML.
+
+    Returns:
+        Policy dict compatible with PolicyConfig.
+    """
+    policy = dict(raw)
+
+    # Legacy: rule.expression → conditions list
+    if "rule" in policy and "conditions" not in policy:
+        rule = policy.pop("rule")
+        if isinstance(rule, dict) and "expression" in rule:
+            policy["conditions"] = [rule["expression"]]
+
+    # Legacy: message is not a PolicyConfig field — drop it
+    policy.pop("message", None)
+
+    # Ensure name exists (some old profiles omit it)
+    if "name" not in policy:
+        policy["name"] = policy.get("id", "unnamed")
+
+    return policy
+
+
+def _migrate_governance_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Migrate a full governance YAML dict to the current schema.
+
+    Args:
+        data: Raw YAML dict.
+
+    Returns:
+        Dict compatible with GovernanceConfig.
+    """
+    if "policies" in data and isinstance(data["policies"], list):
+        data = dict(data)
+        data["policies"] = [_migrate_policy(p) for p in data["policies"]]
+    return data
+
+
 def _load_governance(profile_dir: Path) -> GovernanceConfig:
     """Load governance configuration from governance.yaml."""
     governance_path = profile_dir / GOVERNANCE_FILENAME
     if not governance_path.exists():
         return GovernanceConfig()
     data = _read_yaml(governance_path)
+    data = _migrate_governance_data(data)
     try:
         return GovernanceConfig(**data)
     except PydanticValidationError as e:
         msg = f"Invalid governance config in {governance_path}: {e}"
         raise ConfigurationError(msg) from e
+
+
+def _migrate_field(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate a legacy field definition to the current FieldDefinition schema.
+
+    Handles ``options`` → ``values`` rename.
+
+    Args:
+        raw: Raw field dict from YAML.
+
+    Returns:
+        Field dict compatible with FieldDefinition.
+    """
+    field = dict(raw)
+    if "options" in field and "values" not in field:
+        field["values"] = field.pop("options")
+    # Drop description — FieldDefinition doesn't have it
+    field.pop("description", None)
+    return field
+
+
+def _migrate_artifact_type(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate a legacy artifact type to the current ArtifactTypeConfig schema.
+
+    Handles ``formats`` → ``file_extensions`` rename and drops ``phase``.
+
+    Args:
+        raw: Raw artifact type dict from YAML.
+
+    Returns:
+        Dict compatible with ArtifactTypeConfig.
+    """
+    at = dict(raw)
+    if "formats" in at and "file_extensions" not in at:
+        at["file_extensions"] = at.pop("formats")
+    at.pop("phase", None)
+    return at
+
+
+def _migrate_work_item_types(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Migrate workitems YAML to a list of WorkItemTypeConfig dicts.
+
+    Handles two legacy formats:
+    1. Flat format: ``work_item_type: <id>`` + ``fields: [...]`` (single type)
+    2. Current format: ``work_item_types: [...]`` (list of types)
+
+    Args:
+        data: Raw YAML dict.
+
+    Returns:
+        List of dicts compatible with WorkItemTypeConfig.
+    """
+    # Current format — list under work_item_types
+    if "work_item_types" in data:
+        types = data["work_item_types"]
+        migrated: list[dict[str, Any]] = []
+        for t in types:
+            t = dict(t)
+            if "custom_fields" in t:
+                t["custom_fields"] = [_migrate_field(f) for f in t["custom_fields"]]
+            if "artifact_types" in t:
+                t["artifact_types"] = [_migrate_artifact_type(a) for a in t["artifact_types"]]
+            migrated.append(t)
+        return migrated
+
+    # Legacy flat format — single type
+    if "work_item_type" in data:
+        type_id = data["work_item_type"]
+        fields = [_migrate_field(f) for f in data.get("fields", [])]
+        artifacts = [_migrate_artifact_type(a) for a in data.get("artifact_types", [])]
+        return [{
+            "id": type_id,
+            "name": type_id.replace("-", " ").title(),
+            "custom_fields": fields,
+            "artifact_types": artifacts,
+        }]
+
+    return []
 
 
 def _load_work_item_types(profile_dir: Path) -> list[WorkItemTypeConfig]:
@@ -344,7 +470,7 @@ def _load_work_item_types(profile_dir: Path) -> list[WorkItemTypeConfig]:
     if not workitems_path.exists():
         return []
     data = _read_yaml(workitems_path)
-    types_data = data.get("work_item_types", [])
+    types_data = _migrate_work_item_types(data)
     try:
         return [WorkItemTypeConfig(**t) for t in types_data]
     except PydanticValidationError as e:
@@ -365,6 +491,26 @@ def _load_app_manifest(profile_dir: Path) -> AppManifest | None:
         return AppManifest(**data)
     except PydanticValidationError as e:
         msg = f"Invalid app manifest in {manifest_path}: {e}"
+        raise ConfigurationError(msg) from e
+
+
+def _load_mcp_config(profile_dir: Path):
+    """Load optional MCP configuration from mcp.yaml.
+
+    Returns None if mcp.yaml does not exist or if MCP models are unavailable.
+    """
+    mcp_path = profile_dir / MCP_FILENAME
+    if not mcp_path.exists():
+        return None
+    data = _read_yaml(mcp_path)
+    try:
+        from agent_orchestrator.mcp.models import MCPProfileConfig
+        return MCPProfileConfig(**data)
+    except ImportError:
+        logger.debug("MCP models not available — skipping mcp.yaml")
+        return None
+    except PydanticValidationError as e:
+        msg = f"Invalid MCP config in {mcp_path}: {e}"
         raise ConfigurationError(msg) from e
 
 
@@ -397,6 +543,7 @@ def load_profile(profile_dir: Path) -> ProfileConfig:
     governance = _load_governance(profile_dir)
     work_item_types = _load_work_item_types(profile_dir)
     manifest = _load_app_manifest(profile_dir)
+    mcp = _load_mcp_config(profile_dir)
 
     return ProfileConfig(
         name=profile_name,
@@ -405,6 +552,7 @@ def load_profile(profile_dir: Path) -> ProfileConfig:
         governance=governance,
         work_item_types=work_item_types,
         manifest=manifest,
+        mcp=mcp,
     )
 
 

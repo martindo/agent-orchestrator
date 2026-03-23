@@ -1,0 +1,198 @@
+agents:
+- id: research-manager
+  name: Research Manager
+  description: Decomposes research topics and synthesizes findings into structured
+    outlines
+  system_prompt: 'You are a research manager responsible for planning and synthesis.
+
+    In the planning phase, decompose the research topic into structured sub-queries.
+
+    Output JSON with a sub_queries array, where each entry has: query, rationale,
+    priority (high/medium/low), and expected_insight.
+
+    In the synthesis phase, produce a structured outline combining all verified findings.
+
+    Group findings by theme, note confidence levels, and highlight areas of consensus
+    and disagreement.
+
+    '
+  skills:
+  - research-planning
+  - topic-decomposition
+  - synthesis
+  phases:
+  - planning
+  - synthesis
+  llm:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    temperature: 0.3
+    max_tokens: 4000
+    endpoint: null
+  concurrency: 1
+  retry_policy:
+    max_retries: 2
+    delay_seconds: 1.0
+    backoff_multiplier: 2.0
+  enabled: true
+- id: search-specialist
+  name: Search Specialist
+  description: Generates optimized search queries for web research
+  system_prompt: 'You are a search query specialist. Generate structured JSON search
+    queries for web research.
+
+    Output format: {"queries": [{"text": "...", "intent": "...", "expected_sources":
+    "..."}]}.
+
+    Do NOT execute searches — only generate optimized query strings.
+
+    Consider multiple angles: academic sources, industry reports, news, and primary
+    data.
+
+    Vary query phrasing to maximize coverage and avoid redundant results.
+
+    TARGETED RE-SEARCH MODE: If the Phase Context contains a "targeted_search" key,
+    you are in targeted re-search mode. Inspect "targeted_search.claims" — these are
+    unverified claims needing evidence. Use "targeted_search.targeted_queries" as your
+    primary query list (include all "high" priority entries). Supplement with your own
+    queries to fill remaining gaps. Ensure every unverified claim has at least one query
+    directly addressing it. Output format is unchanged: {"queries": [{"text": "...",
+    "intent": "...", "expected_sources": "..."}]}.
+
+    '
+  skills:
+  - query-generation
+  - search-optimization
+  phases:
+  - search
+  llm:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    temperature: 0.2
+    max_tokens: 3000
+    endpoint: null
+  concurrency: 1
+  retry_policy:
+    max_retries: 2
+    delay_seconds: 1.0
+    backoff_multiplier: 2.0
+  enabled: true
+- id: source-analyst
+  name: Source Analyst
+  description: Extracts findings from search results with credibility assessment
+  system_prompt: 'You are a source analyst specializing in information extraction
+    and credibility assessment.
+
+    For each source, assess credibility on a 0-1 scale based on: author expertise,
+    publication reputation,
+
+    recency, methodology quality, and corroboration by other sources.
+
+    Extract key claims with direct quotes where possible. Note potential biases, conflicts
+    of interest,
+
+    and limitations. Output structured findings with confidence scores.
+
+    Format: {"findings": [{"claim": "...", "source": "...", "credibility": 0.0, "confidence":
+    0.0, "biases": [...], "quotes": [...]}]}
+
+    '
+  skills:
+  - source-analysis
+  - credibility-assessment
+  - fact-extraction
+  phases:
+  - analysis
+  llm:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    temperature: 0.2
+    max_tokens: 4000
+    endpoint: null
+  concurrency: 2
+  retry_policy:
+    max_retries: 2
+    delay_seconds: 1.0
+    backoff_multiplier: 2.0
+  enabled: true
+- id: critic-verifier
+  name: Critic Verifier
+  description: Cross-references findings, identifies contradictions, and flags unsupported
+    claims
+  system_prompt: "You are a critical verifier responsible for ensuring research quality\
+    \ and accuracy.\nCross-reference findings from multiple sources. Identify contradictions,\
+    \ flag unsupported claims,\nand assess overall evidence strength. Mark each finding\
+    \ as confirmed, refuted, uncertain, or challenged.\nIdentify knowledge gaps that\
+    \ require additional search iterations.\n\nESCALATION FLAGS — mark needs_review:\
+    \ true for any finding that meets these criteria:\n- Single-source claims: only\
+    \ one source supports the claim\n- Contradictions: sources directly conflict on\
+    \ the claim\n- Low confidence: your assessed confidence is below 0.4\n- Unverified\
+    \ seed context: claims derived from user-provided assumptions or hypotheses\n\
+    \  that have not been independently corroborated\n\nFor each citation, specify\
+    \ the relationship as \"supports\", \"contradicts\", or \"neutral\".\n\nIMPORTANT:\
+    \ Each entry in supporting_sources and contradicting_sources MUST be an object\
+    \ with these fields: {\"url\": \"EXACT_URL_FROM_SEARCH_RESULTS\", \"excerpt\"\
+    : \"direct quote or summary\", \"relevance\": 0.0-1.0}. Use the exact URL values\
+    \ from the search_results provided in the context. Do NOT use plain strings.\n\
+    \nOutput: {\"verified_findings\": [{\"claim\": \"...\", \"status\": \"confirmed|refuted|uncertain|challenged\"\
+    , \"supporting_sources\": [{\"url\": \"...\", \"excerpt\": \"...\", \"relevance\"\
+    : 0.8}], \"contradicting_sources\": [{\"url\": \"...\", \"excerpt\": \"...\",\
+    \ \"relevance\": 0.8}], \"confidence\": 0.0, \"needs_review\": false, \"review_reason\"\
+    : \"\"}], \"gaps\": [{\"description\": \"...\", \"suggested_queries\": [...]}],\
+    \ \"has_gaps\": true/false}\n"
+  skills:
+  - cross-referencing
+  - verification
+  - gap-analysis
+  phases:
+  - verification
+  llm:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    temperature: 0.3
+    max_tokens: 4000
+    endpoint: null
+  concurrency: 1
+  retry_policy:
+    max_retries: 2
+    delay_seconds: 1.0
+    backoff_multiplier: 2.0
+  enabled: true
+- id: report-writer
+  name: Report Writer
+  description: Writes comprehensive research reports in markdown with academic citations
+  system_prompt: 'You are an expert research report writer. Write comprehensive research
+    reports in markdown format.
+
+    Include: executive summary, detailed analysis sections organized by theme, methodology
+    notes,
+
+    limitations, and conclusions. Use academic citation style with numbered bibliography.
+
+    Each claim must reference its source using [n] notation. Include a confidence
+    assessment for
+
+    key findings. Format the report for readability with clear headings, bullet points,
+    and tables
+
+    where appropriate.
+
+    '
+  skills:
+  - report-writing
+  - citation-formatting
+  - academic-writing
+  phases:
+  - report
+  llm:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    temperature: 0.4
+    max_tokens: 8000
+    endpoint: null
+  concurrency: 1
+  retry_policy:
+    max_retries: 2
+    delay_seconds: 1.0
+    backoff_multiplier: 2.0
+  enabled: true

@@ -452,3 +452,39 @@ This returns specific errors (e.g., agent references a phase that doesn't exist)
 docker compose down -v    # deletes database volume
 docker compose up -d      # recreates everything from scratch
 ```
+
+---
+
+## MCP Integration (Optional)
+
+Connect to external AI tools or expose platform capabilities via the [Model Context Protocol](https://modelcontextprotocol.io):
+
+```bash
+# Install MCP support
+pip install "agent-orchestrator[mcp]"
+```
+
+Add `mcp.yaml` to your profile directory to configure MCP servers and/or enable the MCP server:
+
+```yaml
+# profiles/my-profile/mcp.yaml
+client:
+  servers:
+    - server_id: github
+      display_name: GitHub MCP
+      transport: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-github"]
+      env:
+        GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_TOKEN}"
+
+server:
+  enabled: true
+```
+
+Start with MCP server enabled:
+```bash
+agent-orchestrator serve --workspace . --mcp
+```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md#mcp-integration) and [SDK.md](SDK.md#mcpyaml) for full configuration reference.

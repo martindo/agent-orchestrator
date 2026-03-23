@@ -187,6 +187,10 @@ def _build_user_prompt(
     ]
     if work_item.data:
         parts.append(f"\n## Data\n{_format_dict(work_item.data)}")
+    # Extract and format knowledge before passing remaining phase_context
+    knowledge = phase_context.pop("knowledge", None) if phase_context else None
+    if knowledge:
+        parts.append(f"\n## Relevant Knowledge\n{_format_knowledge(knowledge)}")
     if phase_context:
         parts.append(f"\n## Phase Context\n{_format_dict(phase_context)}")
     if work_item.results:
@@ -203,6 +207,26 @@ def _format_dict(d: dict[str, Any]) -> str:
             lines.append(_format_dict(value))
         else:
             lines.append(f"- **{key}**: {value}")
+    return "\n".join(lines)
+
+
+def _format_knowledge(knowledge: list[dict[str, Any]]) -> str:
+    """Format knowledge records for inclusion in a prompt."""
+    lines: list[str] = []
+    for record in knowledge:
+        title = record.get("title", "Untitled")
+        memory_type = record.get("memory_type", "unknown")
+        confidence = record.get("confidence", 0.0)
+        lines.append(f"### [{memory_type}] {title} (confidence: {confidence:.0%})")
+        content = record.get("content", {})
+        if isinstance(content, dict):
+            lines.append(_format_dict(content))
+        else:
+            lines.append(str(content))
+        tags = record.get("tags", [])
+        if tags:
+            lines.append(f"Tags: {', '.join(tags)}")
+        lines.append("")
     return "\n".join(lines)
 
 

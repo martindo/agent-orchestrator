@@ -25,6 +25,7 @@ from agent_orchestrator.configuration.loader import save_settings
 from agent_orchestrator.configuration.models import PolicyConfig
 from agent_orchestrator.configuration.validator import validate_profile
 from agent_orchestrator.exceptions import AgentError, ConfigurationError, OrchestratorError
+from agent_orchestrator.core.event_bus import Event, EventType
 from agent_orchestrator.governance.audit_logger import RecordType
 
 logger = logging.getLogger(__name__)
@@ -88,10 +89,23 @@ class WorkItemRequest(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
     priority: int = 5
     app_id: str = "default"
+    deadline: str | None = None
+    urgency: str = ""
+    routing_tags: list[str] = Field(default_factory=list)
+
+
+class WorkItemHistoryResponse(BaseModel):
+    """Single history entry for a work item status transition."""
+    timestamp: str
+    from_status: str | None
+    to_status: str
+    phase_id: str = ""
+    agent_id: str = ""
+    reason: str = ""
 
 
 class WorkItemResponse(BaseModel):
-    """Work item response."""
+    """Work item response — full governed state."""
     id: str
     type_id: str
     title: str
@@ -101,6 +115,17 @@ class WorkItemResponse(BaseModel):
     results: dict[str, Any] = Field(default_factory=dict)
     app_id: str = "default"
     run_id: str = ""
+    priority: int = 5
+    submitted_at: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    error: str | None = None
+    attempt_count: int = 0
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    history: list[WorkItemHistoryResponse] = Field(default_factory=list)
+    deadline: str | None = None
+    urgency: str = ""
+    routing_tags: list[str] = Field(default_factory=list)
 
 
 class ExecutionContextResponse(BaseModel):
@@ -168,6 +193,26 @@ class ReviewItemResponse(BaseModel):
     created_at: str = ""
 
 
+class ReviewDecisionRequest(BaseModel):
+    """Request body for completing a review."""
+    reviewer: str
+    notes: str = ""
+
+
+class ReviewItemDetailResponse(BaseModel):
+    """Detailed review item response with decision."""
+    id: str
+    work_id: str
+    phase_id: str
+    reason: str
+    reviewed: bool = False
+    reviewed_by: str | None = None
+    decision: str = ""
+    review_notes: str = ""
+    created_at: str = ""
+    reviewed_at: str | None = None
+
+
 class WorkflowPhaseResponse(BaseModel):
     """Workflow phase response."""
     id: str
@@ -205,6 +250,60 @@ def _get_engine(request: Request):
     Returns the engine or None (does NOT raise).
     """
     return getattr(request.app.state, "engine", None)
+
+
+# ---- Helper: convert WorkItem to response ----
+
+
+def _safe_isoformat(val: Any) -> str | None:
+    """Convert a datetime to ISO format string, or None if not a datetime."""
+    if isinstance(val, datetime):
+        return val.isoformat()
+    return None
+
+
+def _work_item_to_response(item: Any) -> WorkItemResponse:
+    """Convert a WorkItem dataclass to a WorkItemResponse."""
+    from agent_orchestrator.core.work_queue import WorkItem as WI
+    history_entries: list[WorkItemHistoryResponse] = []
+    if isinstance(item, WI) and hasattr(item, "history"):
+        for h in item.history:
+            history_entries.append(WorkItemHistoryResponse(
+                timestamp=h.timestamp.isoformat(),
+                from_status=h.from_status.value if h.from_status else None,
+                to_status=h.to_status.value,
+                phase_id=h.phase_id,
+                agent_id=h.agent_id,
+                reason=h.reason,
+            ))
+
+    error = item.error if isinstance(item.error, (str, type(None))) else None
+    metadata = item.metadata if isinstance(item.metadata, dict) else {}
+    attempt_count = item.attempt_count if isinstance(item.attempt_count, int) else 0
+    priority = item.priority if isinstance(item.priority, int) else 5
+
+    return WorkItemResponse(
+        id=item.id,
+        type_id=item.type_id,
+        title=item.title,
+        status=item.status.value if hasattr(item.status, "value") else str(item.status),
+        current_phase=item.current_phase,
+        data=item.data if isinstance(item.data, dict) else {},
+        results=item.results if isinstance(item.results, dict) else {},
+        app_id=item.app_id,
+        run_id=item.run_id,
+        priority=priority,
+        submitted_at=_safe_isoformat(item.submitted_at),
+        started_at=_safe_isoformat(item.started_at),
+        completed_at=_safe_isoformat(item.completed_at),
+        error=error,
+        attempt_count=attempt_count,
+        metadata=metadata,
+        history=history_entries,
+        deadline=_safe_isoformat(getattr(item, "deadline", None)) if hasattr(item, "deadline") else None,
+        urgency=item.urgency if isinstance(getattr(item, "urgency", None), str) else "",
+        routing_tags=item.routing_tags if isinstance(getattr(item, "routing_tags", None), list) else [],
+    )
 
 
 # ---- Helper: convert AgentDefinition to response ----
@@ -510,6 +609,12 @@ async def list_workitems(request: Request) -> list[WorkItemResponse]:
             title=item["title"],
             status=item["status"],
             current_phase=item.get("current_phase", ""),
+            priority=item.get("priority", 5),
+            submitted_at=item.get("submitted_at"),
+            started_at=item.get("started_at"),
+            completed_at=item.get("completed_at"),
+            error=item.get("error"),
+            attempt_count=item.get("attempt_count", 0),
         )
         for item in items
     ]
@@ -524,6 +629,10 @@ async def create_workitem(body: WorkItemRequest, request: Request) -> WorkItemRe
 
     from agent_orchestrator.core.work_queue import WorkItem
 
+    deadline = None
+    if body.deadline:
+        deadline = datetime.fromisoformat(body.deadline)
+
     work_item = WorkItem(
         id=body.id,
         type_id=body.type_id,
@@ -531,21 +640,16 @@ async def create_workitem(body: WorkItemRequest, request: Request) -> WorkItemRe
         data=body.data,
         priority=body.priority,
         app_id=body.app_id,
+        deadline=deadline,
+        urgency=body.urgency,
+        routing_tags=body.routing_tags,
     )
     try:
         await engine.submit_work(work_item)
     except OrchestratorError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
 
-    return WorkItemResponse(
-        id=work_item.id,
-        type_id=work_item.type_id,
-        title=work_item.title,
-        status=work_item.status.value,
-        current_phase=work_item.current_phase,
-        app_id=work_item.app_id,
-        run_id=work_item.run_id,
-    )
+    return _work_item_to_response(work_item)
 
 
 @workitems_router.get("/workitems/{work_id}", response_model=WorkItemResponse)
@@ -559,22 +663,113 @@ async def get_workitem(work_id: str, request: Request) -> WorkItemResponse:
     if item is None:
         raise HTTPException(status_code=404, detail=f"Work item '{work_id}' not found")
 
-    return WorkItemResponse(
-        id=item.id,
-        type_id=item.type_id,
-        title=item.title,
-        status=item.status.value,
-        current_phase=item.current_phase,
-        data=item.data,
-        results=item.results,
-        app_id=item.app_id,
-        run_id=item.run_id,
-    )
+    return _work_item_to_response(item)
 
 
 # ---- Governance Routes ----
 
 governance_router = APIRouter()
+
+
+@workitems_router.get("/workitems/{work_id}/history", response_model=list[WorkItemHistoryResponse])
+async def get_workitem_history(work_id: str, request: Request) -> list[WorkItemHistoryResponse]:
+    """Get the status transition history for a work item."""
+    engine = _get_engine(request)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+
+    item = engine.get_work_item(work_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail=f"Work item '{work_id}' not found")
+
+    return [
+        WorkItemHistoryResponse(
+            timestamp=h.timestamp.isoformat(),
+            from_status=h.from_status.value if h.from_status else None,
+            to_status=h.to_status.value,
+            phase_id=h.phase_id,
+            agent_id=h.agent_id,
+            reason=h.reason,
+        )
+        for h in item.history
+    ]
+
+
+@workitems_router.get("/workitems/{work_id}/sla")
+async def get_workitem_sla(work_id: str, request: Request) -> dict[str, Any]:
+    """Get SLA status for a work item.
+
+    Returns remaining time, breach status, and deadline information.
+
+    Args:
+        work_id: The work item identifier.
+        request: The incoming HTTP request.
+
+    Returns:
+        SLA status dict with remaining time and breach info.
+    """
+    engine = _get_engine(request)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+
+    item = engine.get_work_item(work_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail=f"Work item '{work_id}' not found")
+
+    deadline = getattr(item, "deadline", None)
+    if deadline is None:
+        return {
+            "work_item_id": work_id,
+            "has_deadline": False,
+            "deadline": None,
+            "remaining_seconds": None,
+            "breached": False,
+            "urgency": getattr(item, "urgency", ""),
+        }
+
+    now = datetime.now(timezone.utc)
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    remaining = (deadline - now).total_seconds()
+
+    return {
+        "work_item_id": work_id,
+        "has_deadline": True,
+        "deadline": deadline.isoformat(),
+        "remaining_seconds": remaining,
+        "breached": remaining <= 0,
+        "urgency": getattr(item, "urgency", ""),
+    }
+
+
+class WorkItemSummaryResponse(BaseModel):
+    """Work item summary with counts."""
+    total: int = 0
+    by_status: dict[str, int] = Field(default_factory=dict)
+    by_type: dict[str, int] = Field(default_factory=dict)
+
+
+@workitems_router.get("/workitems-summary", response_model=WorkItemSummaryResponse)
+async def get_workitems_summary(request: Request) -> WorkItemSummaryResponse:
+    """Get summary counts of work items by status and type."""
+    engine = _get_engine(request)
+    if engine is None:
+        return WorkItemSummaryResponse()
+
+    items = engine.list_work_items()
+    by_status: dict[str, int] = {}
+    by_type: dict[str, int] = {}
+    for item in items:
+        s = item.get("status", "unknown")
+        by_status[s] = by_status.get(s, 0) + 1
+        t = item.get("type_id", "unknown")
+        by_type[t] = by_type.get(t, 0) + 1
+
+    return WorkItemSummaryResponse(
+        total=len(items),
+        by_status=by_status,
+        by_type=by_type,
+    )
 
 
 @governance_router.get("/governance/policies", response_model=list[PolicyResponse])
@@ -644,6 +839,121 @@ async def list_reviews(request: Request) -> list[ReviewItemResponse]:
         )
         for item in items
     ]
+
+
+@governance_router.get("/governance/reviews/{review_id}", response_model=ReviewItemDetailResponse)
+async def get_review(review_id: str, request: Request) -> ReviewItemDetailResponse:
+    """Get a specific review item."""
+    engine = _get_engine(request)
+    if engine is None or engine.review_queue is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+    item = engine.review_queue.get_item(review_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail=f"Review '{review_id}' not found")
+    return ReviewItemDetailResponse(
+        id=item.id,
+        work_id=item.work_id,
+        phase_id=item.phase_id,
+        reason=item.reason,
+        reviewed=item.reviewed,
+        reviewed_by=item.reviewed_by,
+        decision=item.decision,
+        review_notes=item.review_notes,
+        created_at=item.created_at.isoformat(),
+        reviewed_at=item.reviewed_at.isoformat() if item.reviewed_at else None,
+    )
+
+
+@governance_router.post("/governance/reviews/{review_id}/approve", response_model=ReviewItemDetailResponse)
+async def approve_review(review_id: str, body: ReviewDecisionRequest, request: Request) -> ReviewItemDetailResponse:
+    """Approve a review item."""
+    engine = _get_engine(request)
+    if engine is None or engine.review_queue is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+
+    success = engine.review_queue.complete_review(
+        review_id=review_id,
+        reviewed_by=body.reviewer,
+        notes=body.notes,
+        decision="approved",
+    )
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Review '{review_id}' not found")
+
+    # Audit log
+    if engine.audit_logger is not None:
+        engine.audit_logger.append(
+            RecordType.DECISION,
+            "governance.review_approved",
+            f"Review {review_id} approved by {body.reviewer}",
+            data={"review_id": review_id, "reviewer": body.reviewer, "notes": body.notes},
+        )
+
+    # Emit event
+    await engine.event_bus.emit(Event(
+        type=EventType.GOVERNANCE_REVIEW_COMPLETED,
+        data={"review_id": review_id, "decision": "approved", "reviewer": body.reviewer},
+        source="api",
+    ))
+
+    item = engine.review_queue.get_item(review_id)
+    return ReviewItemDetailResponse(
+        id=item.id,
+        work_id=item.work_id,
+        phase_id=item.phase_id,
+        reason=item.reason,
+        reviewed=item.reviewed,
+        reviewed_by=item.reviewed_by,
+        decision=item.decision,
+        review_notes=item.review_notes,
+        created_at=item.created_at.isoformat(),
+        reviewed_at=item.reviewed_at.isoformat() if item.reviewed_at else None,
+    )
+
+
+@governance_router.post("/governance/reviews/{review_id}/reject", response_model=ReviewItemDetailResponse)
+async def reject_review(review_id: str, body: ReviewDecisionRequest, request: Request) -> ReviewItemDetailResponse:
+    """Reject a review item."""
+    engine = _get_engine(request)
+    if engine is None or engine.review_queue is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+
+    success = engine.review_queue.complete_review(
+        review_id=review_id,
+        reviewed_by=body.reviewer,
+        notes=body.notes,
+        decision="rejected",
+    )
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Review '{review_id}' not found")
+
+    if engine.audit_logger is not None:
+        engine.audit_logger.append(
+            RecordType.DECISION,
+            "governance.review_rejected",
+            f"Review {review_id} rejected by {body.reviewer}",
+            data={"review_id": review_id, "reviewer": body.reviewer, "notes": body.notes},
+        )
+
+    await engine.event_bus.emit(Event(
+        type=EventType.GOVERNANCE_REVIEW_COMPLETED,
+        data={"review_id": review_id, "decision": "rejected", "reviewer": body.reviewer},
+        source="api",
+    ))
+
+    item = engine.review_queue.get_item(review_id)
+    return ReviewItemDetailResponse(
+        id=item.id,
+        work_id=item.work_id,
+        phase_id=item.phase_id,
+        reason=item.reason,
+        reviewed=item.reviewed,
+        reviewed_by=item.reviewed_by,
+        decision=item.decision,
+        review_notes=item.review_notes,
+        created_at=item.created_at.isoformat(),
+        reviewed_at=item.reviewed_at.isoformat() if item.reviewed_at else None,
+    )
 
 
 # ---- Execution Routes ----
@@ -1592,3 +1902,428 @@ async def validate_artifact_payload(
         body.context,
     )
     return result.model_dump() if result is not None else {"is_valid": True, "contract_id": contract_id, "violations": []}
+
+
+# ---- Artifact Routes ----
+
+artifacts_router = APIRouter()
+
+
+@artifacts_router.get("/artifacts")
+async def query_artifacts(
+    request: Request,
+    work_id: str | None = None,
+    phase_id: str | None = None,
+    agent_id: str | None = None,
+    artifact_type: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Query artifacts with optional filters."""
+    engine = _get_engine(request)
+    if engine is None:
+        return []
+    store = getattr(engine, '_artifact_store', None)
+    if store is None:
+        return []
+    artifacts = store.query(
+        work_id=work_id, phase_id=phase_id,
+        agent_id=agent_id, artifact_type=artifact_type,
+        limit=limit,
+    )
+    return [
+        {
+            "artifact_id": a.artifact_id,
+            "work_id": a.work_id,
+            "phase_id": a.phase_id,
+            "agent_id": a.agent_id,
+            "artifact_type": a.artifact_type,
+            "content_hash": a.content_hash,
+            "version": a.version,
+            "timestamp": a.timestamp.isoformat(),
+            "run_id": a.run_id,
+            "app_id": a.app_id,
+        }
+        for a in artifacts
+    ]
+
+
+@artifacts_router.get("/artifacts/chain/{work_id}")
+async def get_artifact_chain(work_id: str, request: Request) -> list[dict[str, Any]]:
+    """Get the full evidence chain for a work item."""
+    engine = _get_engine(request)
+    if engine is None:
+        return []
+    store = getattr(engine, '_artifact_store', None)
+    if store is None:
+        return []
+    artifacts = store.get_chain(work_id)
+    return [
+        {
+            "artifact_id": a.artifact_id,
+            "work_id": a.work_id,
+            "phase_id": a.phase_id,
+            "agent_id": a.agent_id,
+            "artifact_type": a.artifact_type,
+            "content_hash": a.content_hash,
+            "content": a.content,
+            "version": a.version,
+            "timestamp": a.timestamp.isoformat(),
+        }
+        for a in artifacts
+    ]
+
+
+@artifacts_router.get("/artifacts/{content_hash}")
+async def get_artifact_by_hash(content_hash: str, request: Request) -> dict[str, Any]:
+    """Retrieve an artifact by its content hash."""
+    engine = _get_engine(request)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+    store = getattr(engine, '_artifact_store', None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="Artifact store not initialized")
+    artifact = store.get_by_hash(content_hash)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail=f"Artifact '{content_hash}' not found")
+    return {
+        "artifact_id": artifact.artifact_id,
+        "work_id": artifact.work_id,
+        "phase_id": artifact.phase_id,
+        "agent_id": artifact.agent_id,
+        "artifact_type": artifact.artifact_type,
+        "content_hash": artifact.content_hash,
+        "content": artifact.content,
+        "version": artifact.version,
+        "timestamp": artifact.timestamp.isoformat(),
+        "run_id": artifact.run_id,
+        "app_id": artifact.app_id,
+    }
+
+
+# ---- Gap Detection & Agent Synthesis Routes ----
+
+
+class GapResponse(BaseModel):
+    """Capability gap response."""
+    id: str
+    phase_id: str
+    agent_id: str | None = None
+    gap_source: str
+    severity: str
+    description: str
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    suggested_capabilities: list[str] = Field(default_factory=list)
+    detected_at: str = ""
+    run_id: str = ""
+
+
+class GapSummaryResponse(BaseModel):
+    """Aggregated gap statistics."""
+    total_gaps: int = 0
+    by_phase: dict[str, int] = Field(default_factory=dict)
+    by_severity: dict[str, int] = Field(default_factory=dict)
+    by_source: dict[str, int] = Field(default_factory=dict)
+
+
+class SynthesisRequest(BaseModel):
+    """Request to generate a synthesis proposal for a gap."""
+    gap_id: str
+
+
+class SynthesisProposalResponse(BaseModel):
+    """Synthesis proposal response."""
+    id: str
+    gap_id: str
+    agent_spec: dict[str, Any] = Field(default_factory=dict)
+    rationale: str = ""
+    confidence: float = 0.0
+    requires_approval: bool = True
+    status: str = "pending"
+    created_at: str = ""
+    feedback: str = ""
+
+
+class SynthesisTestResponse(BaseModel):
+    """Result of pre-deployment validation and testing."""
+    passed: bool
+    proposal_id: str
+    checks: dict[str, str] = Field(default_factory=dict)
+
+
+class SynthesisRejectRequest(BaseModel):
+    """Request body for rejecting a synthesis proposal."""
+    feedback: str = ""
+
+
+def _gap_to_response(gap: Any) -> GapResponse:
+    """Convert a CapabilityGap to a GapResponse."""
+    return GapResponse(
+        id=gap.id,
+        phase_id=gap.phase_id,
+        agent_id=gap.agent_id,
+        gap_source=gap.gap_source.value if hasattr(gap.gap_source, "value") else str(gap.gap_source),
+        severity=gap.severity.value if hasattr(gap.severity, "value") else str(gap.severity),
+        description=gap.description,
+        evidence=gap.evidence,
+        suggested_capabilities=list(gap.suggested_capabilities),
+        detected_at=gap.detected_at.isoformat() if hasattr(gap.detected_at, "isoformat") else str(gap.detected_at),
+        run_id=gap.run_id,
+    )
+
+
+def _proposal_to_response(proposal: Any) -> SynthesisProposalResponse:
+    """Convert a SynthesisProposal to a response."""
+    return SynthesisProposalResponse(
+        id=proposal.id,
+        gap_id=proposal.gap_id,
+        agent_spec=proposal.agent_spec,
+        rationale=proposal.rationale,
+        confidence=proposal.confidence,
+        requires_approval=proposal.requires_approval,
+        status=proposal.status,
+        created_at=proposal.created_at.isoformat() if hasattr(proposal.created_at, "isoformat") else str(proposal.created_at),
+        feedback=proposal.feedback,
+    )
+
+
+gaps_router = APIRouter()
+
+
+@gaps_router.get("/gaps", response_model=list[GapResponse])
+async def list_gaps(request: Request) -> list[GapResponse]:
+    """List all detected capability gaps (static + runtime)."""
+    engine = _get_engine(request)
+    if engine is None:
+        return []
+    gaps = getattr(engine, "detected_gaps", [])
+    return [_gap_to_response(g) for g in gaps]
+
+
+@gaps_router.get("/gaps/summary", response_model=GapSummaryResponse)
+async def get_gap_summary(request: Request) -> GapSummaryResponse:
+    """Get aggregated gap statistics by phase, severity, and source."""
+    engine = _get_engine(request)
+    if engine is None:
+        return GapSummaryResponse()
+    gaps = getattr(engine, "detected_gaps", [])
+    by_phase: dict[str, int] = {}
+    by_severity: dict[str, int] = {}
+    by_source: dict[str, int] = {}
+    for g in gaps:
+        by_phase[g.phase_id] = by_phase.get(g.phase_id, 0) + 1
+        sev = g.severity.value if hasattr(g.severity, "value") else str(g.severity)
+        by_severity[sev] = by_severity.get(sev, 0) + 1
+        src = g.gap_source.value if hasattr(g.gap_source, "value") else str(g.gap_source)
+        by_source[src] = by_source.get(src, 0) + 1
+    return GapSummaryResponse(
+        total_gaps=len(gaps),
+        by_phase=by_phase,
+        by_severity=by_severity,
+        by_source=by_source,
+    )
+
+
+@gaps_router.get("/gaps/{gap_id}", response_model=GapResponse)
+async def get_gap(gap_id: str, request: Request) -> GapResponse:
+    """Get details of a specific capability gap."""
+    engine = _get_engine(request)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+    gaps = getattr(engine, "detected_gaps", [])
+    for g in gaps:
+        if g.id == gap_id:
+            return _gap_to_response(g)
+    raise HTTPException(status_code=404, detail=f"Gap '{gap_id}' not found")
+
+
+@gaps_router.post("/synthesis/propose", response_model=SynthesisProposalResponse)
+async def propose_synthesis(body: SynthesisRequest, request: Request) -> SynthesisProposalResponse:
+    """Generate a synthesis proposal to fill a detected capability gap."""
+    engine = _get_engine(request)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+
+    synthesizer = getattr(engine, "_synthesizer", None)
+    if synthesizer is None:
+        raise HTTPException(status_code=503, detail="Agent synthesizer not initialized")
+
+    # Find the gap
+    gaps = getattr(engine, "detected_gaps", [])
+    gap = None
+    for g in gaps:
+        if g.id == body.gap_id:
+            gap = g
+            break
+    if gap is None:
+        raise HTTPException(status_code=404, detail=f"Gap '{body.gap_id}' not found")
+
+    # Get current profile for context
+    config_mgr = getattr(request.app.state, "config_manager", None) or getattr(engine, "_config", None)
+    if config_mgr is None:
+        raise HTTPException(status_code=503, detail="Configuration manager not available")
+    try:
+        profile = config_mgr.get_profile()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load profile: {exc}") from exc
+
+    proposal = await synthesizer.propose(gap, profile)
+
+    # Audit log
+    if engine.audit_logger is not None:
+        engine.audit_logger.append(
+            RecordType.DECISION,
+            "synthesis.proposed",
+            f"Synthesis proposal '{proposal.id}' for gap '{gap.id}'",
+            data={"proposal_id": proposal.id, "gap_id": gap.id, "confidence": proposal.confidence},
+        )
+
+    return _proposal_to_response(proposal)
+
+
+@gaps_router.get("/synthesis/proposals", response_model=list[SynthesisProposalResponse])
+async def list_proposals(
+    request: Request, status: str | None = None,
+) -> list[SynthesisProposalResponse]:
+    """List synthesis proposals, optionally filtered by status."""
+    engine = _get_engine(request)
+    if engine is None:
+        return []
+    synthesizer = getattr(engine, "_synthesizer", None)
+    if synthesizer is None:
+        return []
+    proposals = synthesizer.list_proposals(status=status)
+    return [_proposal_to_response(p) for p in proposals]
+
+
+@gaps_router.post(
+    "/synthesis/proposals/{proposal_id}/test",
+    response_model=SynthesisTestResponse,
+)
+async def test_proposal(proposal_id: str, request: Request) -> SynthesisTestResponse:
+    """Run pre-deployment validation and dry-run test on a proposal.
+
+    Checks schema validity, phase compatibility, and fires a probe
+    LLM call to verify the synthesized agent can respond.
+    """
+    engine = _get_engine(request)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+
+    synthesizer = getattr(engine, "_synthesizer", None)
+    if synthesizer is None:
+        raise HTTPException(status_code=503, detail="Agent synthesizer not initialized")
+
+    profile = engine.active_profile
+    if profile is None:
+        raise HTTPException(status_code=503, detail="No active profile loaded")
+
+    result = await synthesizer.validate_and_test(proposal_id, profile)
+    return SynthesisTestResponse(
+        passed=result.passed,
+        proposal_id=result.proposal_id,
+        checks=dict(result.checks),
+    )
+
+
+@gaps_router.post(
+    "/synthesis/proposals/{proposal_id}/approve",
+    response_model=SynthesisProposalResponse,
+)
+async def approve_proposal(proposal_id: str, request: Request) -> SynthesisProposalResponse:
+    """Approve a synthesis proposal — validates, tests, then deploys.
+
+    Runs pre-deployment validation before deploying. If validation
+    fails, the proposal is not approved and a 422 is returned with
+    the failing checks.
+    """
+    engine = _get_engine(request)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+
+    synthesizer = getattr(engine, "_synthesizer", None)
+    if synthesizer is None:
+        raise HTTPException(status_code=503, detail="Agent synthesizer not initialized")
+
+    # Pre-deployment validation and test
+    profile = engine.active_profile
+    if profile is None:
+        raise HTTPException(status_code=503, detail="No active profile loaded")
+
+    test_result = await synthesizer.validate_and_test(proposal_id, profile)
+    if not test_result.passed:
+        failed = {k: v for k, v in test_result.checks.items() if v.startswith("fail")}
+        raise HTTPException(
+            status_code=422,
+            detail=f"Pre-deployment test failed: {failed}",
+        )
+
+    proposal = synthesizer.approve_proposal(proposal_id)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail=f"Proposal '{proposal_id}' not found")
+
+    # Deploy the agent via engine
+    try:
+        agent_spec = dict(proposal.agent_spec)
+        agent_spec["enabled"] = True
+        await engine.register_agent(agent_spec)
+        synthesizer.mark_deployed(proposal_id)
+    except (AgentError, OrchestratorError) as exc:
+        raise HTTPException(status_code=422, detail=f"Failed to deploy agent: {exc}") from exc
+
+    # Audit log
+    if engine.audit_logger is not None:
+        engine.audit_logger.append(
+            RecordType.DECISION,
+            "synthesis.approved",
+            f"Proposal '{proposal_id}' approved and agent deployed",
+            data={
+                "proposal_id": proposal_id,
+                "agent_id": proposal.agent_spec.get("id", ""),
+                "test_checks": dict(test_result.checks),
+            },
+        )
+
+    # Emit event
+    await engine.event_bus.emit(Event(
+        type=EventType.AGENT_CREATED,
+        data={
+            "agent_id": proposal.agent_spec.get("id", ""),
+            "source": "synthesis",
+            "proposal_id": proposal_id,
+        },
+        source="synthesis",
+    ))
+
+    updated = synthesizer.get_proposal(proposal_id)
+    return _proposal_to_response(updated or proposal)
+
+
+@gaps_router.post(
+    "/synthesis/proposals/{proposal_id}/reject",
+    response_model=SynthesisProposalResponse,
+)
+async def reject_proposal(
+    proposal_id: str, body: SynthesisRejectRequest, request: Request,
+) -> SynthesisProposalResponse:
+    """Reject a synthesis proposal with optional feedback."""
+    engine = _get_engine(request)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not initialized")
+
+    synthesizer = getattr(engine, "_synthesizer", None)
+    if synthesizer is None:
+        raise HTTPException(status_code=503, detail="Agent synthesizer not initialized")
+
+    proposal = synthesizer.reject_proposal(proposal_id, feedback=body.feedback)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail=f"Proposal '{proposal_id}' not found")
+
+    if engine.audit_logger is not None:
+        engine.audit_logger.append(
+            RecordType.DECISION,
+            "synthesis.rejected",
+            f"Proposal '{proposal_id}' rejected",
+            data={"proposal_id": proposal_id, "feedback": body.feedback},
+        )
+
+    return _proposal_to_response(proposal)

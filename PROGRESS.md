@@ -1,8 +1,11 @@
 # agent-orchestrator Progress
 
-## Status: Phase 20 In Progress — ai-research refactor (Phase 1 of 4 complete)
+## Status: Phase 34 Complete — All Platform Features Implemented
+
+Last updated: 2026-03-14
 
 ## Completed
+
 - [x] Phase 1: Project Scaffold & Configuration System
   - models.py — 20 Pydantic v2 models (frozen, validated)
   - loader.py — YAML loading, profile management, ConfigurationManager
@@ -36,6 +39,7 @@
   - llm_adapter.py — Multi-provider LLM routing with protocol
   - metrics_adapter.py — Execution metrics collection and persistence
   - webhook_adapter.py — Outbound webhook notifications
+  - providers/ — OpenAI, Anthropic, Google, Grok, Ollama provider implementations
 
 - [x] Phase 6: REST API
   - app.py — FastAPI application factory
@@ -48,20 +52,18 @@
 
 - [x] Phase 8: Agent CRUD Management
   - agent_manager.py — Thread-safe AgentManager with full CRUD (create/list/get/update/delete/import/export)
-  - JSON support — loader.py extended with _read_json/_write_json/_read_config_file/_write_config_file
+  - loader.py — Extended with _read_json/_write_json/_read_config_file/_write_config_file
   - EventBus — AGENT_CREATED, AGENT_UPDATED, AGENT_DELETED event types
   - AgentPool — update_definition() and unregister_definition() for runtime updates
   - Engine — register_agent(), update_agent(), unregister_agent() coordinating manager + pool + events
   - REST API — Full CRUD endpoints (GET/POST/PUT/DELETE /agents, /agents/import, /agents/export)
   - CLI — `agent list|get|create|update|delete|import|export` command group
   - Config history — Changes recorded via ConfigHistory for undo capability
-  - Tests: 39 new tests (test_agent_manager.py, test_api.py, test_core.py)
   - Profile component export — export agents/workflow/governance/workitems from loaded profile
     - ConfigurationManager: get_profile_component(), export_profile_component(), export_profile_to_directory()
     - REST API: GET /config/profile/export?component=agents|workflow|governance|workitems|all
     - CLI: `profile export --component <name> --format yaml|json --output <path>`
-    - Round-trip tested: exported agents can be re-imported via AgentManager
-    - Tests: 11 new tests (TestProfileComponentExport)
+  - Tests: 50 tests (test_agent_manager.py, test_api.py, test_core.py)
 
 - [x] Phase 9: Connector Capability Framework
   - connectors/models.py — 12 Pydantic v2 frozen models (CapabilityType, ConnectorStatus, ConnectorInvocationRequest/Result, ExternalArtifact, ConnectorPermissionPolicy, ConnectorConfig, etc.)
@@ -73,137 +75,260 @@
   - exceptions.py — ConnectorError added to exception hierarchy
   - core/engine.py — ConnectorRegistry + ConnectorService initialized on start, connector_service property
   - api/routes.py — GET /connectors/capabilities, GET /connectors/providers
-  - api/app.py — connectors_router registered
-  - docs/connector-architecture.md — Full architecture reference
-  - Tests: 50+ tests (test_connectors.py) covering models, registry, service, permissions, audit, no-domain-field invariant
+  - Tests: 50+ tests (test_connectors.py)
 
-- [x] Phase 10: Connector Capability Framework — Executor, Tracing, and Enhanced Discovery
+- [x] Phase 10: Connector Executor, Tracing & Enhanced Discovery
   - connectors/trace.py — ConnectorExecutionTrace + ConnectorTraceStore (thread-safe ring buffer, query API)
   - connectors/executor.py — ConnectorExecutor with asyncio timeout, exponential backoff retry, error normalization, cost metric emission, trace recording
-  - connectors/models.py — ConnectorRetryPolicy, ConnectorRateLimit; new optional fields on ConnectorProviderDescriptor (version, auth_required, parameter_schemas, result_schema_hint) and ConnectorConfig (retry_policy, rate_limit, version)
+  - connectors/models.py — ConnectorRetryPolicy, ConnectorRateLimit; new optional fields on ConnectorProviderDescriptor and ConnectorConfig
   - connectors/registry.py — find_provider_for_operation() with preferred-provider, operation-declaration, and capability fallback selection
-  - connectors/service.py — Refactored to use ConnectorExecutor; added get_traces(), get_trace_summary(), get_configs(); retry policy read from ConnectorConfig
-  - connectors/__init__.py — Exports for ConnectorRetryPolicy, ConnectorRateLimit, ConnectorExecutionTrace, ConnectorTraceStore, ConnectorExecutor, ConnectorExecutorError
-  - core/engine.py — ConnectorService initialized with metrics collector
-  - api/routes.py — Added GET /connectors/providers/{id}, /connectors/capabilities/{type}/providers, /connectors/configs, /connectors/traces, /connectors/traces/summary
-  - docs/connector-framework.md — Comprehensive capability model, invocation flow, artifact envelope, cost tracking, retry config, tracing, and provider extension guide
-  - docs/connector-architecture.md — Added ConnectorExecutor, ConnectorTraceStore, provider selection, and extension boundary sections
-  - Tests: 30 new tests (total ~336+)
+  - connectors/service.py — Refactored to use ConnectorExecutor; added get_traces(), get_trace_summary(), get_configs()
+  - api/routes.py — GET /connectors/providers/{id}, /connectors/capabilities/{type}/providers, /connectors/configs, /connectors/traces, /connectors/traces/summary
+  - Tests: 30 new tests
 
-- [x] Phase 11: Connector Capability Framework — Auth Abstraction, Normalized Artifacts, Approval Gating, and Cost Metadata
-  - connectors/auth.py — AuthType (6 values), ConnectorAuthConfig, ConnectorSessionContext, build_session_context(); credential-reference model (env var names only, never raw credentials); to_log_summary() for safe logging
-  - connectors/normalized.py — 7 capability-specific normalized artifact schemas (SearchResultArtifact, DocumentArtifact, MessageArtifact, TicketArtifact, RepositoryArtifact, TelemetryArtifact, IdentityArtifact); NormalizedArtifactBase; get_normalized_type(); try_normalize() (best-effort, never raises)
-  - connectors/models.py — ConnectorStatus.REQUIRES_APPROVAL; ConnectorCostMetadata (billing_label, cost_center, unit_price, currency, notes); ConnectorPermissionPolicy.requires_approval field; ConnectorProviderDescriptor.auth_type field (str, avoids circular import); ConnectorConfig.auth_config (dict) and cost_metadata fields
-  - connectors/permissions.py — PermissionOutcome enum (ALLOW/DENY/REQUIRES_APPROVAL); PermissionEvaluationResult dataclass; evaluate_permission_detailed() with approval-gated write detection; _requires_write_approval() helper; existing evaluate_permission() unchanged
-  - connectors/service.py — execute() updated to use evaluate_permission_detailed(); REQUIRES_APPROVAL outcome returns ConnectorStatus.REQUIRES_APPROVAL result; get_connector_auth_config() method added
-  - connectors/__init__.py — Exports for all new types: AuthType, ConnectorAuthConfig, ConnectorSessionContext, build_session_context, all normalized artifact classes, get_normalized_type, try_normalize, ConnectorCostMetadata, PermissionOutcome, PermissionEvaluationResult, evaluate_permission_detailed
-  - docs/connector-framework.md — Added sections: Authentication Abstraction, Normalized Capability Artifacts, why threat_intel is not in platform taxonomy, Approval-Gated Write Operations, Cost Metadata
-  - Tests: 49 new tests (total ~435)
+- [x] Phase 11: Auth Abstraction, Normalized Artifacts, Approval Gating & Cost Metadata
+  - connectors/auth.py — AuthType (6 values), ConnectorAuthConfig, ConnectorSessionContext, build_session_context(); credential-reference model (env var names only, never raw credentials)
+  - connectors/normalized.py — 7 capability-specific normalized artifact schemas (SearchResultArtifact, DocumentArtifact, MessageArtifact, TicketArtifact, RepositoryArtifact, TelemetryArtifact, IdentityArtifact)
+  - connectors/models.py — ConnectorStatus.REQUIRES_APPROVAL; ConnectorCostMetadata; ConnectorPermissionPolicy.requires_approval field
+  - connectors/permissions.py — PermissionOutcome enum (ALLOW/DENY/REQUIRES_APPROVAL); PermissionEvaluationResult; evaluate_permission_detailed()
+  - connectors/service.py — REQUIRES_APPROVAL outcome handling; get_connector_auth_config()
+  - Tests: 49 new tests
 
 - [x] Phase 12: Web Search Connector Providers (Tavily + SerpAPI + Brave)
-  - connectors/providers/web_search/_base.py — BaseWebSearchProvider ABC with execute() dispatch, _fetch_page() via httpx, _normalize_search() → SearchResultArtifact
-  - connectors/providers/web_search/tavily.py — TavilySearchProvider (primary, AI-optimized, basic/advanced depth, $0.004/$0.008/search)
-  - connectors/providers/web_search/serpapi.py — SerpAPISearchProvider (secondary, Google/Bing-backed via SerpAPI, $0.005/search)
-  - connectors/providers/web_search/brave.py — BraveSearchProvider (tertiary, independent index, privacy-preserving, $0.003/search)
-  - All three: search(), fetch_page(), extract_content() operations; SearchResultArtifact + DocumentArtifact normalization; ConnectorCostInfo populated on every search; ConnectorProviderProtocol structurally satisfied
-  - pyproject.toml — httpx moved to core dependencies
-  - docs/connectors/web-search.md — Full provider guide with configuration, operations, cost, permissions, module integration
-  - Tests: 43 new tests (test_web_search_providers.py) covering descriptor shape, search normalization, cost info, fetch_page, extract_content, unknown op → NOT_FOUND, HTTP errors → FAILURE, empty key validation, protocol structural check
+  - connectors/providers/web_search/_base.py — BaseWebSearchProvider ABC
+  - connectors/providers/web_search/tavily.py — TavilySearchProvider (AI-optimized, $0.004/$0.008/search)
+  - connectors/providers/web_search/serpapi.py — SerpAPISearchProvider (Google/Bing-backed, $0.005/search)
+  - connectors/providers/web_search/brave.py — BraveSearchProvider (independent index, $0.003/search)
+  - All three: search(), fetch_page(), extract_content() operations; SearchResultArtifact + DocumentArtifact normalization
+  - Tests: 43 tests (test_web_search_providers.py)
 
 - [x] Phase 13: Documents Capability Provider (Confluence)
-  - connectors/providers/documents/_base.py — BaseDocumentsProvider ABC: execute() dispatch for search_documents/get_document/extract_section; _make_document_artifact() static helper producing ExternalArtifact envelope with DocumentArtifact normalized_payload and ExternalReference links; DocumentsProviderError
-  - connectors/providers/documents/confluence.py — ConfluenceDocumentsProvider: REST API v1 search (CQL with optional space scoping), get_document (full body.storage expand), extract_section (section extraction from Confluence storage markup via heading/anchor match); Basic auth (Cloud email+token) and Bearer auth (Server PAT); _extract_section_from_storage() pure function
-  - connectors/providers/__init__.py — ConfluenceDocumentsProvider added to top-level exports
-  - docs/connectors/documents.md — Full provider guide: auth modes, operations, ExternalArtifact output shapes, module integration, adding future providers
-  - Tests: ~40 new tests (test_documents_providers.py)
+  - connectors/providers/documents/_base.py — BaseDocumentsProvider ABC
+  - connectors/providers/documents/confluence.py — ConfluenceDocumentsProvider: REST API v1 search (CQL), get_document, extract_section; Basic auth and Bearer auth
+  - Tests: ~40 tests (test_documents_providers.py)
 
 - [x] Phase 14: Messaging Capability Providers (Slack + Teams + Email)
-  - connectors/providers/messaging/_base.py — BaseMessagingProvider ABC: execute() dispatch for send_message/notify_user/create_thread (all read_only=False); _make_message_artifact() static helper producing ExternalArtifact envelope with MessageArtifact normalized_payload; MessagingProviderError
-  - connectors/providers/messaging/slack.py — SlackMessagingProvider: chat.postMessage, conversations.open for DM, thread creation via initial post; ExternalReference with message ts; Slack ok=False error handling
-  - connectors/providers/messaging/teams.py — TeamsMessagingProvider: Incoming Webhook (MessageCard schema); notify_user falls back to @mention in channel; thread via title+text card; "1" response validation
-  - connectors/providers/messaging/email.py — EmailMessagingProvider: smtplib STARTTLS in asyncio executor; MIMEMultipart with Message-ID; notify_user treats user_id as email address; create_thread uses title as Subject
-  - connectors/providers/__init__.py — SlackMessagingProvider, TeamsMessagingProvider, EmailMessagingProvider added to exports
-  - docs/connectors/messaging.md — Full provider guide: write-op approval gating, auth/config per provider, operation param tables, ExternalArtifact output shapes, Teams webhook limitations, module integration
-  - Tests: ~50 new tests (test_messaging_providers.py)
+  - connectors/providers/messaging/_base.py — BaseMessagingProvider ABC
+  - connectors/providers/messaging/slack.py — SlackMessagingProvider: chat.postMessage, DM, thread creation
+  - connectors/providers/messaging/teams.py — TeamsMessagingProvider: Incoming Webhook (MessageCard schema)
+  - connectors/providers/messaging/email.py — EmailMessagingProvider: smtplib STARTTLS in asyncio executor
+  - Tests: ~50 tests (test_messaging_providers.py)
 
 - [x] Phase 15: Ticketing Capability Providers (Jira + Linear)
-  - connectors/providers/ticketing/_base.py — BaseTicketingProvider ABC: execute() → _dispatch() for create_ticket/update_ticket (read_only=False), get_ticket/search_tickets (read_only=True); _make_ticket_artifact() and _make_ticket_list_artifact() static helpers; TicketingProviderError
-  - connectors/providers/ticketing/jira.py — JiraTicketingProvider: Basic auth (email+token) and Bearer (PAT); ADF description format; create/update/get/search via Jira REST API v3; JQL search; _extract_jira_description() for ADF→text
-  - connectors/providers/ticketing/linear.py — LinearTicketingProvider: GraphQL API; priority mapping (urgent/high/medium/low/none → 1-4/0); IssueCreate/IssueUpdate/Issue mutations; search via containsIgnoreCase filter
-  - connectors/providers/__init__.py — JiraTicketingProvider, LinearTicketingProvider added to exports
-  - docs/connectors/ticketing.md — Full provider guide: auth, operations, ExternalArtifact output shapes, write-op approval gating, Linear GraphQL notes
-  - Tests: 48 new tests (test_ticketing_providers.py)
+  - connectors/providers/ticketing/_base.py — BaseTicketingProvider ABC
+  - connectors/providers/ticketing/jira.py — JiraTicketingProvider: REST API v3, JQL search, ADF format
+  - connectors/providers/ticketing/linear.py — LinearTicketingProvider: GraphQL API, priority mapping
+  - Tests: 48 tests (test_ticketing_providers.py)
 
 - [x] Phase 16: Repository Capability Providers (GitHub + GitLab)
-  - connectors/providers/repository/_base.py — BaseRepositoryProvider ABC: all 4 operations read_only=True; _make_repo_artifact(), _make_repo_list_artifact(), _make_file_artifact(), _make_commit_list_artifact(), _make_pr_artifact() static helpers; RepositoryProviderError
-  - connectors/providers/repository/github.py — GitHubRepositoryProvider: Bearer token + GitHub API v3; search_repo (Search API), get_file (contents endpoint, base64 decode), list_commits, get_pull_request; _get() centralizes HTTP + 404; directory listing error
-  - connectors/providers/repository/gitlab.py — GitLabRepositoryProvider: PRIVATE-TOKEN or Bearer auth; numeric/namespace repo_id encoding; file path URL-encoding; merge request IID for get_pull_request; self-hosted base_url support
-  - connectors/providers/__init__.py — GitHubRepositoryProvider, GitLabRepositoryProvider added to exports
-  - docs/connectors/repository.md — Full provider guide: auth scopes, operations, ExternalArtifact output shapes, GitLab vs GitHub differences, provider registration
-  - Tests: 50 new tests (test_repository_providers.py)
+  - connectors/providers/repository/_base.py — BaseRepositoryProvider ABC
+  - connectors/providers/repository/github.py — GitHubRepositoryProvider: GitHub API v3
+  - connectors/providers/repository/gitlab.py — GitLabRepositoryProvider: GitLab REST API, self-hosted support
+  - Tests: 50 tests (test_repository_providers.py)
 
 - [x] Phase 17: Connector Runtime Governance
-  - connectors/governance_service.py — ConnectorGovernanceService wrapping ConnectorRegistry: enable_connector/disable_connector (frozen model copy + re-register), update_scoping (selective module/role field updates), add_policy/remove_policy (policy list manipulation), discover(module_name, agent_role) (enabled + scope filtering + provider availability), get_effective_permissions (per-operation evaluate_permission_detailed); ConnectorDiscoveryItem and EffectivePermissions frozen dataclasses with as_dict()
-  - connectors/service.py — _check_config_access() added: checks enabled flag and module/role scoping before policy evaluation; no configs → allow; all disabled → UNAVAILABLE; no scope match → PERMISSION_DENIED; _collect_policies() now accepts context dict and respects scoping
-  - connectors/__init__.py — ConnectorGovernanceService, ConnectorGovernanceError, ConnectorDiscoveryItem, EffectivePermissions exported
-  - core/engine.py — ConnectorGovernanceService initialized eagerly alongside registry; connector_governance_service property added
-  - api/routes.py — 8 new governance endpoints: POST /connectors/configs, GET /connectors/configs/{id}, POST /connectors/configs/{id}/enable, POST /connectors/configs/{id}/disable, PUT /connectors/configs/{id}/scoping, POST /connectors/configs/{id}/policies, DELETE /connectors/configs/{id}/policies/{policy_id}, GET /connectors/discovery, GET /connectors/configs/{id}/permissions
-  - docs/connector-governance.md — Full governance reference: lifecycle, scoping, permission policies, discovery, effective permissions, REST API reference
-  - Tests: 44 new tests (test_connector_governance.py): enable/disable, scoping, policy CRUD, discover with module/role context, effective permissions, config-not-found errors, ConnectorService config-level access enforcement
+  - connectors/governance_service.py — ConnectorGovernanceService: enable/disable connectors, update scoping, add/remove policies, discover(module, role), get_effective_permissions; ConnectorDiscoveryItem, EffectivePermissions frozen dataclasses
+  - connectors/service.py — _check_config_access() for enabled flag and module/role scoping
+  - core/engine.py — ConnectorGovernanceService initialized eagerly; connector_governance_service property
+  - api/routes.py — 8 governance endpoints (CRUD configs, enable/disable, scoping, policies, discovery, permissions)
+  - Tests: 44 tests (test_connector_governance.py)
 
-- [x] Phase 21: Enterprise Runtime Foundation — Execution Context, Run Identity & Deployment Profiles
-  - configuration/models.py — DeploymentMode enum (lite/standard/enterprise), ExecutionContext frozen model (app_id, run_id, tenant_id, environment, deployment_mode, profile_name, extra), PersistenceBackend extended with POSTGRESQL, SettingsConfig extended with deployment_mode
-  - core/context.py — New file: create_root_context(), create_run_context(), context_tags() — pure helpers, no shared state
-  - core/work_queue.py — WorkItem extended with run_id="" and app_id="default"
-  - core/agent_executor.py — ExecutionResult extended with run_id=""; execute()/execute_once() gain context param
-  - core/phase_executor.py — execute_phase(), _execute_parallel(), _execute_sequential(), _execute_single_agent() gain context param
-  - core/pipeline_manager.py — PipelineEntry extended with run_id="" and app_id="default"
-  - core/event_bus.py — Event frozen dataclass extended with app_id="" and run_id=""
-  - governance/audit_logger.py — AuditRecord extended with app_id="" and run_id=""; append() and query() gain app_id/run_id params
-  - core/engine.py — Root context created in start(); run context forked in submit_work() with UUID run_id; context propagated to all events, audit records, and metrics tags in _process_work_item()
-  - api/routes.py — GET /api/v1/context endpoint; WorkItemRequest gains app_id; WorkItemResponse gains app_id/run_id; ExecutionContextResponse model
-  - api/app.py — app.state.execution_context set from engine.context during create_app()
-  - __init__.py — ExecutionContext and DeploymentMode added to public exports
-  - docs/INSTALL.md — New comprehensive installation guide covering lite, standard, and enterprise deployment modes
-  - Tests: 28 new tests (test_execution_context.py) covering models, immutability, context helpers, data structure extensions, audit query filtering, public exports
-  - All 800 tests passing, fully backward-compatible (all new fields have safe defaults)
-
-- [~] Phase 20: ai-research Connector Refactor — expose execute endpoint (Phase 1/4 complete)
-  - api/routes.py — ConnectorExecuteRequest model + POST /api/v1/connectors/execute route; resolves CapabilityType, delegates to ConnectorService.execute(), returns serialized ConnectorInvocationResult; non-2xx statuses are embedded in result (caller checks status field)
-  - tests/unit/test_api.py — 10 new tests: success, all fields passed, permission_denied, unavailable, unknown capability_type (422), no engine (503), no connector service (503), cost_info included, empty context → None, all 5 core capability types accepted
-  - Remaining: Phase 2 (OrchestratorClient in ai-research), Phase 3 (replace search layer), Phase 4 (update tests)
+- [x] Phase 18: Automatic Provider Discovery & Plugin Architecture
+  - connectors/discovery.py — ConnectorProviderDiscovery: builtin package scan, external directories, entry points; DiscoveryResult, ProviderLoadError, LazyConnectorProvider, make_lazy_provider()
+  - All 11 builtin providers — from_env() classmethod: reads env vars, returns None if credentials missing, instance if configured
+  - connectors/models.py — configuration_schema field on ConnectorProviderDescriptor
+  - core/engine.py — discover_builtin_providers() in _initialize_components; connector_discovery property; rediscover_providers()
+  - api/routes.py — GET /connectors/discovery/status, POST /connectors/discovery/refresh
+  - Tests: 56 tests (test_provider_discovery.py)
 
 - [x] Phase 19: Contract Framework
-  - contracts/models.py — 10 Pydantic v2 frozen models and enums: CapabilityContract, ArtifactContract, ArtifactValidationRule, ContractViolation, ContractValidationResult, ContractTimeoutPolicy, ContractRetryPolicy; ReadWriteClassification, AuditRequirement, FailureSemantic, ContractViolationSeverity, LifecycleState
-  - contracts/registry.py — Thread-safe ContractRegistry: register/get/find/list/unregister for both CapabilityContract and ArtifactContract; summary() for introspection
-  - contracts/validator.py — ContractValidator: validate_capability_input(), validate_capability_output(), validate_artifact(); JSON Schema fragment validation (required fields, type checking); 6 ArtifactValidationRule types (min_length, max_length, allowed_values, type_check, required_if, pattern); provenance checking; optional AuditLogger integration (SYSTEM_EVENT on violations); non-blocking by design
-  - contracts/__init__.py — Clean public API with all models, enums, ContractRegistry, ContractValidator exported
-  - connectors/service.py — _validate_input_contract() integrated; input validation runs before provider lookup so contract violations are raised before any execution attempt
-  - docs/agent-orchestrator-architecture.md — New architecture reference document (v0.5.0) with layer map, component descriptions, and contract framework section
-  - Tests: 59 new tests (test_contracts.py) covering all models, registry CRUD, all validator paths including schema validation, artifact rules, provenance, audit logging, and ConnectorService integration
+  - contracts/models.py — 10 Pydantic v2 frozen models: CapabilityContract, ArtifactContract, ArtifactValidationRule, ContractViolation, ContractValidationResult, ContractTimeoutPolicy, ContractRetryPolicy; enums for ReadWriteClassification, AuditRequirement, FailureSemantic, ContractViolationSeverity, LifecycleState
+  - contracts/registry.py — Thread-safe ContractRegistry: register/get/find/list/unregister for CapabilityContract and ArtifactContract
+  - contracts/validator.py — ContractValidator: validate_capability_input(), validate_capability_output(), validate_artifact(); JSON Schema fragment validation; 6 ArtifactValidationRule types; optional AuditLogger integration
+  - connectors/service.py — _validate_input_contract() integrated before provider lookup
+  - Tests: 59 tests (test_contracts.py)
 
-- [x] Phase 18: Automatic Provider Discovery and Plugin Architecture
-  - connectors/discovery.py — ConnectorProviderDiscovery: discovers providers from the builtin package (pkgutil.walk_packages), external directories (rglob .py), and entry points (importlib.metadata); DiscoveryResult dataclass (registered/skipped/errors with as_dict()/summary()); ProviderLoadError dataclass; LazyConnectorProvider (defers construction to first execute() call, returns UNAVAILABLE on init failure); make_lazy_provider() helper
-  - All 11 builtin providers — from_env() classmethod added: reads env vars, returns None if credentials missing (never raises for missing creds), returns instance if configured; covers TavilySearchProvider, SerpAPISearchProvider, BraveSearchProvider, ConfluenceDocumentsProvider, SlackMessagingProvider, TeamsMessagingProvider, EmailMessagingProvider, JiraTicketingProvider, LinearTicketingProvider, GitHubRepositoryProvider, GitLabRepositoryProvider
-  - connectors/models.py — configuration_schema field added to ConnectorProviderDescriptor (dict, default empty)
-  - core/engine.py — ConnectorProviderDiscovery initialized eagerly; discover_builtin_providers() called in _initialize_components() after ConnectorService init; connector_discovery property; last_discovery_result property; rediscover_providers(plugin_directory) method
-  - connectors/__init__.py — ConnectorProviderDiscovery, DiscoveryResult, ProviderLoadError, LazyConnectorProvider, make_lazy_provider exported
-  - api/routes.py — GET /connectors/discovery/status (last discovery result), POST /connectors/discovery/refresh (re-run discovery, optional plugin_directory param)
-  - docs/connector-provider-development.md — Full provider development guide: interface, from_env() contract, descriptor fields, operation descriptors, plugin directories, entry points, lazy initialization, error isolation, env var reference table, testing patterns
-  - docs/connector-framework.md — Added "Automatic Provider Discovery" section and completed REST API reference table
-  - Tests: 56 new tests (test_provider_discovery.py): DiscoveryResult, _looks_like_provider, _instantiate, _try_register_class (all error paths), _scan_module, discover_directory (real file, faulty file, underscore skip), discover_builtin_providers (no crash, env-driven registration, deduplication), discover_entry_points, LazyConnectorProvider (descriptor hint, factory deferral, single call, failure isolation), make_lazy_provider, from_env() on all 11 builtin providers (with/without credentials), configuration_schema field
+- [x] Phase 20: Connector Execute Endpoint (platform-side complete)
+  - api/routes.py — ConnectorExecuteRequest model + POST /api/v1/connectors/execute route; resolves CapabilityType, delegates to ConnectorService.execute(), returns serialized ConnectorInvocationResult
+  - Tests: 10 tests in test_api.py (success, permission_denied, unavailable, unknown capability, no engine, cost_info, all capability types)
+  - Note: OrchestratorClient and search layer migration are external-project scope
+
+- [x] Phase 21: Enterprise Runtime Foundation
+  - configuration/models.py — DeploymentMode enum (lite/standard/enterprise), ExecutionContext frozen model (app_id, run_id, tenant_id, environment, deployment_mode, profile_name, extra), PersistenceBackend.POSTGRESQL
+  - core/context.py — create_root_context(), create_run_context(), context_tags() pure helpers
+  - core/work_queue.py — WorkItem extended with run_id, app_id
+  - core/agent_executor.py — ExecutionResult extended with run_id; execute()/execute_once() gain context param
+  - core/phase_executor.py — execute_phase() and helpers gain context param
+  - core/pipeline_manager.py — PipelineEntry extended with run_id, app_id
+  - core/event_bus.py — Event extended with app_id, run_id
+  - governance/audit_logger.py — AuditRecord extended with app_id, run_id; query gains app_id/run_id params
+  - core/engine.py — Root context in start(); run context forked in submit_work() with UUID run_id; context propagated to events, audit records, metrics
+  - api/routes.py — GET /api/v1/context endpoint; WorkItemRequest/Response gain app_id/run_id
+  - __init__.py — ExecutionContext, DeploymentMode exported
+  - Tests: 28 tests (test_execution_context.py)
+
+- [x] Phase 22: MCP Integration (Model Context Protocol)
+  - mcp/models.py — 9 Pydantic v2 frozen models: MCPTransportType, MCPServerConfig, MCPClientConfig, MCPServerHostConfig, MCPProfileConfig, MCPToolInfo, MCPResourceInfo, MCPPromptInfo, MCPSessionInfo
+  - mcp/exceptions.py — MCPError hierarchy: MCPConnectionError, MCPToolCallError, MCPResourceError, MCPConfigurationError
+  - mcp/client_manager.py — MCPClientManager: session lifecycle (stdio/streamable_http/sse), tool/resource/prompt discovery, call_tool/read_resource/get_prompt
+  - mcp/bridge.py — MCPToolConnectorProvider (wraps MCP tool as ConnectorProviderProtocol), MCPConnectorBridge (discovery to registration)
+  - mcp/client_prompts.py — MCPPromptResolver for agent prompt building
+  - mcp/server.py — create_mcp_server() + create_mcp_asgi_app() via FastMCP + Streamable HTTP
+  - mcp/server_tools.py — Dynamic tool generation from ConnectorRegistry + static orchestration tools
+  - mcp/server_resources.py — 7 resources (status, workitems, audit, config/agents, config/workflow, config/governance, connectors)
+  - mcp/server_prompts.py — One MCP prompt per AgentDefinition
+  - mcp/server_governance.py — GovernedToolDispatcher: Governor.evaluate() + ConnectorService.execute() + AuditLogger.append()
+  - mcp/server_session.py — MCPSessionRegistry with TTL eviction and max session limits
+  - pyproject.toml — `mcp = ["mcp>=1.0"]` optional dependency
+  - configuration/loader.py — _load_mcp_config() for mcp.yaml
+  - core/engine.py — _initialize_mcp() in start(), disconnect in stop()
+  - cli/commands.py — --mcp flag on serve command
+  - Tests: 71 tests (test_mcp_models, test_mcp_client_manager, test_mcp_bridge, test_mcp_server, test_mcp_server_governance)
+
+- [x] Phase 23: Knowledge System, Gap Detection & Agent Synthesis
+  - knowledge/models.py — MemoryType enum, MemoryRecord and MemoryQuery dataclasses
+  - knowledge/store.py — KnowledgeStore with JSONL index + content-addressed JSON files, SHA-256 dedup, thread-safe
+  - knowledge/extractor.py — MemoryExtractor for explicit agent memories and auto-extraction on completion
+  - api/knowledge_routes.py — 6 REST endpoints (query, store, get, delete, supersede, stats)
+  - Engine integration: KnowledgeStore init, knowledge injection into phase context, AGENT_COMPLETED/WORK_COMPLETED event handlers
+  - agent_executor.py — _format_knowledge() helper, knowledge section in _build_user_prompt()
+  - event_bus.py — MEMORY_STORED, MEMORY_RETRIEVED, GAP_DETECTED event types
+  - exceptions.py — KnowledgeError
+  - configuration/models.py — WorkflowPhaseConfig extended with required_capabilities and expected_output_fields
+  - configuration/validator.py — validate_capability_coverage() pass: explicit skill check, output-field vs gate mismatch, empty-phase warning
+  - core/gap_detector.py — CapabilityGap frozen dataclass, GapSource (10 values), GapSeverity (3 values), SignalWindow, GapDetectionThresholds, GapSignalCollector (EventBus subscriber, sliding-window counters), GapAnalyzer (threshold analysis)
+  - core/agent_synthesizer.py — SynthesisProposal frozen model, AgentSynthesizer (LLM-powered propose() + fallback template synthesis, proposal lifecycle: pending/approved/rejected/deployed)
+  - core/engine.py — GapSignalCollector, GapAnalyzer, AgentSynthesizer initialized in start(); static gap detection at startup and on reload; runtime analysis after WORK_PHASE_EXITED
+  - api/routes.py — 7 endpoints: GET /gaps, /gaps/summary, /gaps/{id}, POST /synthesis/propose, GET /synthesis/proposals, POST /synthesis/proposals/{id}/approve, /synthesis/proposals/{id}/reject
+  - Tests: 67 tests (test_knowledge_store.py, test_memory_extractor.py, test_engine_knowledge.py, test_capability_validation.py, test_gap_detector.py, test_agent_synthesizer.py)
+
+- [x] Phase 24: Capability / Team Registry
+  - catalog/models.py — InvocationMode, SecurityClassification, MemoryUsagePolicy enums + CapabilityRegistration frozen model
+  - catalog/registry.py — TeamRegistry with thread-safe register/get/find/list_all/unregister/summary
+  - catalog/auto_register.py — build_registration_from_profile() deriving schema from custom_fields + expected_output_fields
+  - api/catalog_routes.py — 7 REST endpoints (list, get, register, update, delete, summary, invoke)
+  - Engine integration: _team_registry field, auto-registration in _initialize_components, team_registry property
+  - event_bus.py — CAPABILITY_REGISTERED, CAPABILITY_INVOKED event types
+  - exceptions.py — CatalogError
+  - Tests: 49 tests (test_team_registry.py, test_auto_register.py, test_catalog_routes.py)
+
+- [x] Phase 25: Cryptographic Decision Ledger
+  - governance/decision_ledger.py — DecisionType/DecisionOutcome enums, frozen DecisionRecord dataclass, DecisionLedger with SHA-256 hash chaining (previous_hash + record_hash), JSONL persistence, verify_chain(), query by work_item/agent/type/outcome/phase/run, get_decision_chain, get_agent_decisions, summary
+  - api/ledger_routes.py — 5 REST endpoints (query, chain/{work_item_id}, agent/{agent_id}, verify, summary)
+  - Engine integration: _decision_ledger field, _initialize_decision_ledger
+  - event_bus.py — DECISION_RECORDED event type
+  - exceptions.py — LedgerError, SimulationError
+  - Tests: 28 tests (test_decision_ledger.py, test_ledger_routes.py)
+
+- [x] Phase 26: Organizational Skill Map
+  - catalog/skill_models.py — SkillMaturity enum, SkillMetrics (success_rate, confidence, maturity derivation), SkillRecord (agents, phases, knowledge_sources, per-agent metrics), SkillCoverage
+  - catalog/skill_map.py — SkillMap: thread-safe CRUD, find with filters, record_execution, auto_register_from_profile, get_coverage (strong/weak/unassigned), get_agent_profile, JSONL persistence
+  - api/skillmap_routes.py — 8 REST endpoints (list, get, register, delete, record, coverage/report, agent profile, summary)
+  - Engine integration: _skill_map field, _initialize_skill_map with auto-registration from profile agents/skills
+  - event_bus.py — SKILL_UPDATED event type
+  - Tests: 30 tests (test_skill_map.py, test_skillmap_routes.py)
+
+- [x] Phase 27: Agent Simulation / Sandbox
+  - simulation/__init__.py — Package exports
+  - simulation/models.py — SimulationConfig, SimulationResult, ComparisonResult, SimulationOutcome, SimulationStatus
+  - simulation/sandbox.py — SimulationSandbox: replay historical work items against new workflows, outcome classification (same/improved/regressed/new_success/new_failure), dry-run mode
+  - api/simulation_routes.py — 5 REST endpoints (list, get, run, cancel, summary)
+  - Engine integration: _simulation_sandbox field
+  - event_bus.py — SIMULATION_COMPLETED event type
+  - Tests: 19 tests (test_simulation.py, test_simulation_routes.py)
+
+- [x] Phase 28: Output Parsing, Quality Gates & Work-Item Factory
+  - core/output_parser.py — extract_confidence() with fallback, extract_structured_fields() for required field validation, aggregate_confidence() for multi-agent score aggregation
+  - core/quality_gate.py — evaluate_quality_gate() against execution context, evaluate_phase_quality_gates() for batch evaluation; leverages Governor condition evaluation
+  - core/work_item_factory.py — create_work_item() factory with field type validation (TEXT/STRING/INTEGER/FLOAT/BOOLEAN/ENUM), strict vs lenient mode, default value injection
+  - Engine integration: output_parser called in _process_work_item(); quality_gate called in phase_executor
+  - Tests: tests in test_output_parser.py, test_quality_gate.py, test_work_item_factory.py
+
+- [x] Phase 29: SLA Monitoring & Work-Item Persistence
+  - core/sla_monitor.py — SLAMonitor: background async task monitoring work item deadlines; emits SLA_WARNING (80% elapsed), SLA_BREACH (past deadline), SLA_ESCALATION events; priority boost on breach; deduplication
+  - event_bus.py — SLA_WARNING, SLA_BREACH, SLA_ESCALATION event types
+  - persistence/work_item_store.py — WorkItemStore: JSONL-backed persistence with upsert semantics; query by status/type_id/app_id/run_id; get_incomplete() for crash recovery; summary()
+  - persistence/artifact_store.py — ArtifactStore: content-addressable file-based storage (SHA-256 hashing); JSONL index + individual content files; deduplication; query by work_id/phase_id/agent_id/artifact_type
+  - Engine integration: SLAMonitor started/stopped with lifecycle; WorkItemStore and ArtifactStore initialized in _initialize_components
+  - Tests: 17 tests (test_sla_monitor.py) + 18 tests (test_work_item_store.py) + tests in test_artifact_store.py
+
+- [x] Phase 30: Work-Item Lineage Tracing
+  - persistence/lineage.py — LineageBuilder: unified chronological timeline across 4 data sources (WorkItem history, DecisionLedger, ArtifactStore, AuditLogger); LineageEvent and WorkItemLineage dataclasses; decision chain integrity verification; graceful degradation
+  - api/lineage_routes.py — 3 REST endpoints (full lineage, decision chain, artifacts)
+  - Engine integration: constructed on-demand from engine stores
+  - Tests: 13 tests (test_lineage_routes.py)
+
+- [x] Phase 31: Benchmark Suites & Regression Testing
+  - simulation/benchmark.py — BenchmarkStore (JSONL persistence for suites and run results), BenchmarkRunner (execute suites, compare actual vs expected outcomes)
+  - simulation/models.py — BenchmarkCase, BenchmarkSuiteConfig, BenchmarkCaseResult, BenchmarkRunResult dataclasses
+  - api/benchmark_routes.py — 8 REST endpoints (list/create/get/delete suites, run suite, create from history, list/get runs)
+  - Engine integration: benchmark_store and benchmark_runner properties
+  - Tests: 20 tests (test_benchmark_routes.py)
+
+- [x] Phase 32: Audit Gap Fixes
+  - governance/review_queue.py — JSONL persistence for review items (no more in-memory-only loss)
+  - governance/governor.py — Safe policy evaluation (no eval/exec of arbitrary expressions)
+  - governance/audit_logger.py — Log rotation support; audit file size management
+  - adapters/webhook_adapter.py — Full webhook delivery implementation (httpx-based POST with retries)
+  - core/phase_executor.py — Phase timeout enforcement via asyncio.wait_for
+  - core/agent_executor.py — Multi-dimensional scoring (beyond single confidence float)
+  - governance/review_queue.py — Review SLA tracking (deadline, escalation)
+  - persistence/ — Score history persistence for trend analysis
+  - core/work_queue.py — WorkItemHistoryEntry for lifecycle state tracking
+  - Tests: tests in test_engine_governance.py, test_critic_agent.py, test_work_queue.py
+
+- [x] Phase 33: Memory Improvements
+  - knowledge/embedding.py — EmbeddingService: OpenAI-compatible embedding API client; cosine_similarity() for vector comparison
+  - knowledge/context_memory.py — ContextMemory: per-work-item conversation history tracking; stores CONVERSATION memory records in KnowledgeStore
+  - knowledge/store.py — Enhanced relevance scoring in retrieve(); semantic query support; memory expiry cleanup (cleanup_expired)
+  - knowledge/models.py — CONVERSATION MemoryType added
+  - Tests: tests in test_knowledge_improvements.py (embedding, context memory, relevance scoring, expiry cleanup, semantic query)
+
+- [x] Phase 34: Eval System (LLM-as-Judge, Rubrics, A/B Testing, Datasets)
+  - simulation/evaluator.py — LLM-as-judge evaluator: EvalDimension, EvalRubric, EvalResult dataclasses; configurable rubric-based scoring (0.0-1.0 per dimension with reasoning); fallback scoring on LLM failure
+  - simulation/rubric_store.py — RubricStore: JSONL persistence for EvalRubric instances; built-in rubric templates (DEFAULT_QUALITY_RUBRIC and others)
+  - simulation/ab_test.py — ABTestConfig, ABTestResult, ABTestHarness: compare two workflow variants head-to-head via SimulationSandbox; per-item and aggregate outcome comparison
+  - simulation/dataset.py — EvalDataset dataclass, DatasetStore: JSONL persistence for reusable evaluation datasets; CRUD operations
+  - simulation/executor.py — SimulationExecutor: wraps PhaseExecutor for sandbox-compatible execution; creates ephemeral WorkItems from historical data
+  - api/eval_routes.py — eval_router: REST endpoints for rubric CRUD, evaluate, A/B tests, dataset management
+  - Engine integration: rubric_store, dataset_store, evaluator properties
+  - Tests: tests in test_eval_system.py (evaluator, rubric store, A/B tests, datasets, routes)
+
+## Studio (All 14 Phases + Settings Page Complete)
+
+- [x] P1: Studio Scaffold — pyproject.toml, app.py, config.py, cli.py, exceptions.py, CORS config
+- [x] P2: IR Models — 17 Pydantic models in studio/ir/models.py covering all runtime types
+- [x] P3: Schema Extraction — schemas/extractor.py: extract_all_schemas(), extract_component_schema()
+- [x] P4: YAML Generation — generation/generator.py: generate all YAML files matching runtime loader
+- [x] P5: Runtime Validation — validation/validator.py: 4 validation passes + runtime integration
+- [x] P6: Connector Discovery — connectors/discovery.py: query runtime /connectors/providers
+- [x] P7: Condition Expressions — conditions/builder.py: build, parse, validate expressions
+- [x] P8: Workflow Graph Validation — graph/validator.py: DAG analysis, orphan detection, reachability
+- [x] P9: Deploy Profiles — deploy/deployer.py: write files + trigger runtime reload
+- [x] P10: Extension Stubs — extensions/generator.py: connector, event handler, hook stubs
+- [x] P11: Prompt Packs — prompts/generator.py: 5 prompt types for coding assistants
+- [x] P12: V1 Frontend — React 18 + TypeScript + Tailwind: 8 pages (Overview, Agents, Workflow, Governance, WorkItems, Preview, Deploy, Settings), API client, Zustand store, React Flow graph
+- [x] P13: Template Import/Export — templates/manager.py: round-trip tested (import, export, reimport)
+- [x] P14: Regeneration Boundaries — manifest/tracker.py: .studio-manifest.json ownership tracking
+- [x] Settings Page — SettingsPage.tsx + settings_routes.py: LLM API key management (masked display), provider endpoint config, live model fetching from provider APIs; keys stored in memory + optional YAML persistence
+
+**Studio Backend:** 32 Python files (studio/ package) + 13 route files (studio/routes/)
+**Studio Frontend:** 13 TypeScript/TSX files (8 pages, API client, store, common components)
+**Studio Tests:** 95 tests passing
+**Studio Docs:** ARCHITECTURE.md, USER_GUIDE.md, INSTALL.md
 
 ## Test Summary
-- Total: 800 tests
-- All passing
 
-## Packages Extracted to coderswarm-packages
-- (none yet — all code is domain-specific to agent-orchestrator)
+- **Runtime tests:** 1356 passing
+- **Studio tests:** 95 passing
+- **Total:** 1451 tests
 
 ## Known Issues
+
 - (none)
 
 ## Architecture Highlights
+
 - Zero hardcoded domain knowledge — all in YAML profiles
 - Non-blocking governance — decisions are immediate, reviews queued
 - EventBus decoupling — engine emits events, consumers subscribe independently
@@ -211,3 +336,7 @@
 - Hash-chained audit trail — tamper-evident JSONL ledger
 - Per-agent LLM config — each agent specifies its own provider/model
 - Profile switching — change active profile to switch entire domain
+- MCP integration — expose/consume tools via Model Context Protocol
+- Content-addressable artifact storage — SHA-256 dedup
+- Cryptographic decision ledger — SHA-256 hash chaining with verification
+- LLM-as-judge evaluation — rubric-based scoring with A/B test harness

@@ -90,6 +90,7 @@ agents:
   - id: reviewer
     name: Code Reviewer
     description: Reviews code for quality, correctness, and best practices
+    enabled: false  # Disabled until autonomous developer agents are available
     system_prompt: |
       You are a code review agent. Review code changes for:
       - Correctness and logic errors
@@ -113,6 +114,7 @@ agents:
   - id: security-scanner
     name: Security Scanner
     description: Scans code for security vulnerabilities
+    enabled: false  # Disabled until autonomous developer agents are available
     system_prompt: |
       You are a security analysis agent. Scan code for OWASP Top 10
       vulnerabilities, dependency risks, secrets exposure, and

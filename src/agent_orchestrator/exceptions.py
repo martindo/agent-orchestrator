@@ -55,3 +55,23 @@ class ContractViolationError(ContractError):
     Only raised when CapabilityContract.failure_semantics == FailureSemantic.FAIL_FAST
     and the caller chooses strict enforcement.
     """
+
+
+class KnowledgeError(OrchestratorError):
+    """Knowledge store or memory operation error."""
+
+
+class CatalogError(OrchestratorError):
+    """Capability catalog registration or invocation error."""
+
+
+class LedgerError(OrchestratorError):
+    """Decision ledger recording or verification error."""
+
+
+class SimulationError(OrchestratorError):
+    """Simulation configuration or execution error."""
+
+
+class WorkItemValidationError(OrchestratorError):
+    """Work item data fails validation against its type config's custom_fields."""

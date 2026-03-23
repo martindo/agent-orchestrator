@@ -8,6 +8,7 @@ Thread-safe: All public methods use internal lock for policy management.
 
 from __future__ import annotations
 
+import ast
 import logging
 import threading
 from dataclasses import dataclass, field
@@ -228,9 +229,9 @@ def _evaluate_condition(condition: str, context: dict[str, Any]) -> bool:
             key = parts[0].strip()
             value = context.get(key)
             try:
-                target = eval(parts[1].strip(), {"__builtins__": {}}, {})  # noqa: S307
+                target = ast.literal_eval(parts[1].strip())
                 return value in target
-            except Exception:
+            except (ValueError, SyntaxError):
                 return False
 
     # Handle comparison operators
@@ -244,7 +245,7 @@ def _evaluate_condition(condition: str, context: dict[str, Any]) -> bool:
                 if ctx_value is None:
                     return False
                 try:
-                    target = eval(raw_value, {"__builtins__": {}}, {})  # noqa: S307
+                    target = ast.literal_eval(raw_value)
                     if op == ">=":
                         return ctx_value >= target
                     elif op == "<=":
@@ -257,6 +258,6 @@ def _evaluate_condition(condition: str, context: dict[str, Any]) -> bool:
                         return ctx_value > target
                     elif op == "<":
                         return ctx_value < target
-                except Exception:
+                except (ValueError, SyntaxError):
                     return False
     return False

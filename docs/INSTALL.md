@@ -36,6 +36,9 @@ pip install agent-orchestrator
 # With all LLM provider SDKs
 pip install "agent-orchestrator[llm]"
 
+# With MCP support (Model Context Protocol)
+pip install "agent-orchestrator[mcp]"
+
 # With dev/test tools
 pip install "agent-orchestrator[llm,dev]"
 ```

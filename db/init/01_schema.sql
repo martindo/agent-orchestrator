@@ -439,6 +439,15 @@ CREATE TABLE metrics (
 CREATE INDEX idx_metrics_name ON metrics(name);
 CREATE INDEX idx_metrics_time ON metrics(recorded_at);
 
+-- ---- Domain Catalogs (AI Workflow Recommender) ----
+
+CREATE TABLE domain_catalogs (
+    domain      VARCHAR(128) PRIMARY KEY,
+    data        JSONB        NOT NULL,
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
 -- ---- Config History ----
 
 CREATE TABLE config_history (
@@ -482,5 +491,8 @@ CREATE TRIGGER trg_workflow_phases_updated
 
 CREATE TRIGGER trg_work_item_types_updated
     BEFORE UPDATE ON work_item_types FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TRIGGER trg_domain_catalogs_updated
+    BEFORE UPDATE ON domain_catalogs FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 COMMIT;

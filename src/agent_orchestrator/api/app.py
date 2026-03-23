@@ -11,13 +11,23 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
+from agent_orchestrator.api.benchmark_routes import benchmark_router
+from agent_orchestrator.api.catalog_routes import catalog_router
+from agent_orchestrator.api.eval_routes import eval_router
+from agent_orchestrator.api.knowledge_routes import knowledge_router
+from agent_orchestrator.api.ledger_routes import ledger_router
+from agent_orchestrator.api.lineage_routes import lineage_router
+from agent_orchestrator.api.simulation_routes import simulation_router
+from agent_orchestrator.api.skillmap_routes import skillmap_router
 from agent_orchestrator.api.routes import (
     agents_router,
+    artifacts_router,
     audit_router,
     config_router,
     connectors_router,
     contracts_router,
     execution_router,
+    gaps_router,
     governance_router,
     health_router,
     metrics_router,
@@ -88,9 +98,60 @@ def create_app(
     app.include_router(config_router, prefix=API_PREFIX, tags=["config"])
     app.include_router(connectors_router, prefix=API_PREFIX, tags=["connectors"])
     app.include_router(contracts_router, prefix=API_PREFIX, tags=["contracts"])
+    app.include_router(artifacts_router, prefix=API_PREFIX, tags=["artifacts"])
+    app.include_router(gaps_router, prefix=API_PREFIX, tags=["gaps"])
+    app.include_router(knowledge_router, prefix=API_PREFIX, tags=["knowledge"])
+    app.include_router(catalog_router, prefix=API_PREFIX, tags=["catalog"])
+    app.include_router(ledger_router, prefix=API_PREFIX, tags=["ledger"])
+    app.include_router(skillmap_router, prefix=API_PREFIX, tags=["skills"])
+    app.include_router(simulation_router, prefix=API_PREFIX, tags=["simulation"])
+    app.include_router(lineage_router, prefix=API_PREFIX, tags=["lineage"])
+    app.include_router(benchmark_router, prefix=API_PREFIX, tags=["benchmarks"])
+    app.include_router(eval_router, prefix=API_PREFIX, tags=["evals"])
+
+    # Mount MCP server if engine has MCP config enabled
+    _try_mount_mcp(app, engine)
 
     logger.info("API application created")
     return app
+
+
+def _try_mount_mcp(app: FastAPI, engine: object | None) -> None:
+    """Mount MCP ASGI app if MCP server is enabled in config.
+
+    Args:
+        app: FastAPI application to mount on.
+        engine: Optional OrchestrationEngine instance.
+    """
+    if engine is None:
+        return
+
+    try:
+        config_manager = getattr(engine, "_config", None)
+        if config_manager is None:
+            return
+
+        profile = config_manager.get_profile()
+        mcp_config = getattr(profile, "mcp", None)
+        if mcp_config is None:
+            return
+
+        from agent_orchestrator.mcp.models import MCPProfileConfig
+        if not isinstance(mcp_config, MCPProfileConfig):
+            return
+
+        server_config = mcp_config.server
+        if not server_config.enabled:
+            return
+
+        from agent_orchestrator.mcp.server import create_mcp_asgi_app
+        mcp_app = create_mcp_asgi_app(engine, server_config)
+        app.mount(server_config.mount_path, mcp_app)
+        logger.info("MCP server mounted at %s", server_config.mount_path)
+    except ImportError:
+        logger.debug("MCP package not installed — MCP server not mounted")
+    except Exception:
+        logger.warning("Failed to mount MCP server", exc_info=True)
 
 
 def _try_init_managers(app: FastAPI, workspace_dir: Path) -> None:

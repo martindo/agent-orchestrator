@@ -1,0 +1,48 @@
+delegated_authority:
+  auto_approve_threshold: 0.9
+  review_threshold: 0.5
+  abort_threshold: 0.1
+
+policies:
+  - id: auto-approve-safe
+    name: Auto-Approve Safe Content
+    action: allow
+    conditions:
+      - "confidence >= 0.9"
+      - "severity == 'none'"
+    priority: 100
+    tags:
+      - auto-approve
+
+  - id: flag-low-confidence
+    name: Flag Low Confidence
+    action: review
+    conditions:
+      - "confidence < 0.5"
+    priority: 90
+
+  - id: block-high-severity
+    name: Block High Severity
+    action: deny
+    conditions:
+      - "severity == 'high'"
+    priority: 80
+    tags:
+      - safety
+
+  - id: escalate-medium-severity
+    name: Escalate Medium Severity
+    action: escalate
+    conditions:
+      - "severity == 'medium'"
+      - "confidence < 0.7"
+    priority: 70
+
+  - id: require-human-review
+    name: Require Human Review
+    action: review
+    conditions:
+      - "requires_human == true"
+    priority: 60
+    tags:
+      - human-in-the-loop

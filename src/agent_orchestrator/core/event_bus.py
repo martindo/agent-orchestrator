@@ -57,6 +57,34 @@ class EventType(str, Enum):
     # Config events
     CONFIG_RELOADED = "config.reloaded"
 
+    # Gap detection events
+    GAP_DETECTED = "gap.detected"
+
+    # SLA events
+    SLA_WARNING = "sla.warning"
+    SLA_BREACH = "sla.breach"
+    SLA_ESCALATION = "sla.escalation"
+
+    # Knowledge / memory events
+    MEMORY_STORED = "memory.stored"
+    MEMORY_RETRIEVED = "memory.retrieved"
+
+    # Catalog events
+    CAPABILITY_REGISTERED = "catalog.capability_registered"
+    CAPABILITY_INVOKED = "catalog.capability_invoked"
+
+    # Decision ledger events
+    DECISION_RECORDED = "ledger.decision_recorded"
+
+    # Skill map events
+    SKILL_UPDATED = "skillmap.skill_updated"
+
+    # Simulation events
+    SIMULATION_COMPLETED = "simulation.completed"
+
+    # Work item lifecycle events
+    WORK_ITEM_TRANSITIONED = "work_item.transitioned"
+
     # System events
     SYSTEM_STARTED = "system.started"
     SYSTEM_STOPPED = "system.stopped"

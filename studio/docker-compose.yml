@@ -1,0 +1,39 @@
+# =============================================================================
+# Agent-Orchestrator Studio — Docker Compose
+# =============================================================================
+# Usage:
+#   docker compose -f studio/docker-compose.yml up -d --build
+#   docker compose -f studio/docker-compose.yml down
+#   docker compose -f studio/docker-compose.yml logs studio
+#
+# Studio UI:  http://localhost:8004
+# Runtime API (if using full stack): http://localhost:8000
+#
+# Environment variables (optional):
+#   STUDIO_RUNTIME_URL    — runtime API base URL  (default: http://api:8000)
+#   STUDIO_LOG_LEVEL      — Python log level       (default: INFO)
+#   STUDIO_PORT           — Studio listen port     (default: 8004)
+# =============================================================================
+
+services:
+  studio:
+    build:
+      context: ..
+      dockerfile: studio/Dockerfile
+    container_name: agent-orchestrator-studio
+    restart: unless-stopped
+    ports:
+      - "${STUDIO_PORT:-8004}:8004"
+    volumes:
+      - ../workspace:/workspace
+    environment:
+      - STUDIO_RUNTIME_URL=${STUDIO_RUNTIME_URL:-http://api:8000}
+      - STUDIO_WORKSPACE_DIR=/workspace
+      - STUDIO_LOG_LEVEL=${STUDIO_LOG_LEVEL:-INFO}
+      - STUDIO_PORT=8004
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8004/api/studio/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

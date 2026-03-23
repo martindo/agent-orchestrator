@@ -293,6 +293,22 @@ class WorkflowPhaseConfig(BaseModel):
     entry_conditions: list[ConditionConfig] = Field(default_factory=list)
     exit_conditions: list[ConditionConfig] = Field(default_factory=list)
     quality_gates: list[QualityGateConfig] = Field(default_factory=list)
+    critic_agent: str | None = Field(
+        default=None,
+        description="Agent ID of critic that evaluates phase output",
+    )
+    critic_rubric: str = Field(
+        default="",
+        description="Evaluation rubric passed to the critic agent",
+    )
+    max_phase_retries: int = Field(
+        default=1,
+        description="Max re-executions on critic rejection",
+    )
+    retry_backoff_seconds: float = Field(
+        default=1.0,
+        description="Backoff between re-executions on critic rejection",
+    )
     on_success: str = Field(
         default="",
         description="Next phase ID on success (empty = terminal)",
@@ -305,6 +321,18 @@ class WorkflowPhaseConfig(BaseModel):
     skip: bool = Field(default=False, description="Runtime toggle to skip this phase")
     is_terminal: bool = False
     requires_human: bool = False
+    timeout_seconds: float = Field(
+        default=0.0,
+        description="Phase-level timeout in seconds (0 means no timeout)",
+    )
+    required_capabilities: list[str] = Field(
+        default_factory=list,
+        description="Capabilities required by this phase (matched against agent skills)",
+    )
+    expected_output_fields: list[str] = Field(
+        default_factory=list,
+        description="Output fields agents in this phase should produce",
+    )
 
 
 # ---- Workflow ----
@@ -404,6 +432,17 @@ class FieldDefinition(BaseModel):
         return self
 
 
+class SLAConfig(BaseModel):
+    """SLA configuration for a work item type."""
+
+    model_config = {"frozen": True}
+
+    default_deadline_seconds: int | None = None
+    escalation_threshold_seconds: int | None = None
+    max_queue_time_seconds: int | None = None
+    priority_boost_on_breach: int = 2
+
+
 class WorkItemTypeConfig(BaseModel):
     """Definition of a work item type within a profile."""
 
@@ -414,6 +453,7 @@ class WorkItemTypeConfig(BaseModel):
     description: str = ""
     custom_fields: list[FieldDefinition] = Field(default_factory=list)
     artifact_types: list[ArtifactTypeConfig] = Field(default_factory=list)
+    sla: SLAConfig = Field(default_factory=SLAConfig)
 
 
 # ---- App Manifest (optional, per-profile) ----
@@ -469,4 +509,8 @@ class ProfileConfig(BaseModel):
     manifest: AppManifest | None = Field(
         default=None,
         description="Optional app manifest from app.yaml",
+    )
+    mcp: Any | None = Field(
+        default=None,
+        description="Optional MCP configuration from mcp.yaml (MCPProfileConfig)",
     )

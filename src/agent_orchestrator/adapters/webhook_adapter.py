@@ -8,10 +8,11 @@ Thread-safe: Stateless send function.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -78,14 +79,24 @@ class WebhookAdapter:
         event_type: str,
         payload: dict[str, Any],
     ) -> None:
-        """Send a webhook notification (stub — real HTTP in production).
-
-        In production, this would use httpx or aiohttp.
-        """
-        logger.debug(
-            "Webhook notification: %s -> %s (event=%s)",
-            webhook.id, webhook.url, event_type,
-        )
+        """Send a webhook notification via HTTP POST."""
+        body = {"event_type": event_type, "payload": payload}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    webhook.url,
+                    json=body,
+                    headers=webhook.headers,
+                )
+                response.raise_for_status()
+                logger.debug(
+                    "Webhook notification sent: %s -> %s (status=%d)",
+                    webhook.id, webhook.url, response.status_code,
+                )
+        except httpx.HTTPError as e:
+            logger.error(
+                "Webhook '%s' HTTP error: %s", webhook.id, e, exc_info=True,
+            )
 
     def list_webhooks(self) -> list[WebhookConfig]:
         """List all registered webhooks."""

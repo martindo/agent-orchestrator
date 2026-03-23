@@ -1,0 +1,27 @@
+project:
+  type: default
+
+format:
+  pdf:
+    documentclass: article
+    papersize: letter
+    geometry:
+      - margin=1in
+    fontsize: 11pt
+    mainfont: "Latin Modern Roman"
+    monofont: "Latin Modern Mono"
+    colorlinks: true
+    linkcolor: "blue"
+    toc: true
+    number-sections: true
+    code-block-bg: "#f5f5f5"
+    code-block-border-left: "#cccccc"
+    highlight-style: github
+  html:
+    theme: cosmo
+    toc: true
+    number-sections: true
+    code-fold: false
+  docx:
+    toc: true
+    number-sections: true

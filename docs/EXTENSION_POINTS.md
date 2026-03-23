@@ -129,6 +129,59 @@ contract_registry.register(my_capability_contract)
 
 ---
 
+---
+
+## 5. MCP Integration (Model Context Protocol)
+
+**What it does:** Adds bidirectional interoperability with the AI ecosystem. As an **MCP client**, agents consume tools, resources, and prompts from external MCP servers. As an **MCP server**, the platform exposes its governed capabilities to external AI clients (e.g., Claude Desktop, other MCP-aware tools).
+
+**MCP is a protocol adapter** — it reuses the existing connector framework, governance pipeline, and audit logging. Every MCP tool call flows through `ConnectorService.execute()`.
+
+**MCP Client wiring:**
+
+Add `mcp.yaml` to a profile directory:
+
+```yaml
+client:
+  servers:
+    - server_id: github
+      display_name: GitHub MCP Server
+      transport: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-github"]
+      env:
+        GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_TOKEN}"
+      capability_type_override: repository
+```
+
+On engine start, discovered tools are automatically registered as connector providers — agents can call them with the same governance as native connectors.
+
+**MCP Server wiring:**
+
+```yaml
+server:
+  enabled: true
+  mount_path: "/mcp"
+```
+
+Or use the CLI flag: `agent-orchestrator serve --mcp`
+
+External AI clients can then connect to `http://host:port/mcp` and access:
+- Dynamic tools from all registered connector providers
+- Orchestration tools (submit/get/list work items, engine status, agent listing)
+- Resources (status, audit trail, config)
+- Prompts (one per agent definition)
+
+All tool calls go through `GovernedToolDispatcher` (Governor evaluation + audit logging).
+
+**Dependency:** `pip install "agent-orchestrator[mcp]"` — the platform works without the `mcp` package; MCP features are silently disabled.
+
+**Reference:**
+- `src/agent_orchestrator/mcp/` — full MCP integration package
+- [ARCHITECTURE.md](../ARCHITECTURE.md#mcp-integration) — architecture details
+
+---
+
 ## See Also
 
 - [SDK.md](../SDK.md) — Full configuration and API reference, including the "Building Apps" section
