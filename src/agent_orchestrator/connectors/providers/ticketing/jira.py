@@ -371,6 +371,136 @@ class JiraTicketingProvider(BaseTicketingProvider):
         logger.info("Jira search_tickets: query=%r total=%d", query, total)
         return artifact.model_dump(mode="json"), None
 
+    async def _transition_ticket(
+        self,
+        ticket_id: str,
+        transition_name: str,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """Transition a Jira issue to a new workflow state.
+
+        Fetches available transitions, finds the one matching transition_name
+        (case-insensitive), and executes it.
+
+        Args:
+            ticket_id: Jira issue key (e.g. "PROJ-123").
+            transition_name: Target transition name (e.g. "In Progress", "Done").
+
+        Returns:
+            Tuple of (ExternalArtifact dict, None -- no tracked API cost).
+
+        Raises:
+            TicketingProviderError: When transition not found or on HTTP errors.
+        """
+        transitions_url = self._api_url(f"issue/{ticket_id}/transitions")
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(
+                    transitions_url,
+                    headers=self._auth_headers(),
+                )
+                resp.raise_for_status()
+                transitions = resp.json().get("transitions", [])
+
+                target = next(
+                    (t for t in transitions if t["name"].lower() == transition_name.lower()),
+                    None,
+                )
+                if not target:
+                    available = [t["name"] for t in transitions]
+                    raise TicketingProviderError(
+                        f"Transition '{transition_name}' not found for {ticket_id}. "
+                        f"Available: {available}"
+                    )
+
+                resp = await client.post(
+                    transitions_url,
+                    headers=self._auth_headers(),
+                    json={"transition": {"id": target["id"]}},
+                )
+                resp.raise_for_status()
+        except TicketingProviderError:
+            raise
+        except httpx.HTTPError as exc:
+            raise TicketingProviderError(f"Jira HTTP error: {exc}") from exc
+
+        url = self._ticket_url(ticket_id)
+        refs: list[ExternalReference] = [
+            ExternalReference(
+                provider=self.provider_id,
+                resource_type="jira_issue",
+                external_id=ticket_id,
+                url=url,
+            )
+        ]
+
+        artifact = self._make_ticket_artifact(
+            provider=self.provider_id,
+            connector_id=self.provider_id,
+            ticket_id=ticket_id,
+            title="",
+            description=None,
+            status=transition_name,
+            priority=None,
+            assignee=None,
+            url=url,
+            raw_payload={"ticket_id": ticket_id, "transitioned_to": transition_name},
+            resource_type="ticket",
+            provenance={"provider": "jira", "action": "transition"},
+            references=refs,
+        )
+
+        logger.info("Jira transition_ticket: key=%r to=%r", ticket_id, transition_name)
+        return artifact.model_dump(mode="json"), None
+
+    async def _get_sprint_issues(
+        self,
+        sprint_id: int,
+        board_id: int | None,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """List issues assigned to a Jira sprint.
+
+        Uses the Jira Agile REST API endpoint.
+
+        Args:
+            sprint_id: Sprint ID.
+            board_id: Board ID (unused for this endpoint, kept for interface).
+
+        Returns:
+            Tuple of (ExternalArtifact dict, None -- no tracked API cost).
+
+        Raises:
+            TicketingProviderError: On HTTP or API errors.
+        """
+        agile_url = f"{self._base_url}/rest/agile/1.0/sprint/{sprint_id}/issue"
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    agile_url,
+                    headers=self._auth_headers(),
+                )
+                response.raise_for_status()
+                data: dict = response.json()
+        except httpx.HTTPError as exc:
+            raise TicketingProviderError(f"Jira HTTP error: {exc}") from exc
+
+        issues: list[dict] = data.get("issues", [])
+        total: int = data.get("total", len(issues))
+        items = [_normalize_jira_issue(issue, self._base_url) for issue in issues]
+
+        artifact = self._make_ticket_list_artifact(
+            provider=self.provider_id,
+            connector_id=self.provider_id,
+            query=f"sprint={sprint_id}",
+            items=items,
+            total=total,
+            provenance={"provider": "jira", "sprint_id": sprint_id},
+        )
+
+        logger.info("Jira get_sprint_issues: sprint_id=%d total=%d", sprint_id, total)
+        return artifact.model_dump(mode="json"), None
+
 
 # ---------------------------------------------------------------------------
 # Module-level helpers

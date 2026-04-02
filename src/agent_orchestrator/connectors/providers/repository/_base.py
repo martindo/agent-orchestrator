@@ -55,6 +55,38 @@ _REPOSITORY_OPS: list[ConnectorOperationDescriptor] = [
         required_parameters=["repo_id", "pr_id"],
         optional_parameters=[],
     ),
+    ConnectorOperationDescriptor(
+        operation="create_issue",
+        description="Create a new issue in a repository",
+        capability_type=CapabilityType.REPOSITORY,
+        read_only=False,
+        required_parameters=["repo_id", "title"],
+        optional_parameters=["body", "labels"],
+    ),
+    ConnectorOperationDescriptor(
+        operation="list_issues",
+        description="List issues in a repository filtered by state",
+        capability_type=CapabilityType.REPOSITORY,
+        read_only=True,
+        required_parameters=["repo_id"],
+        optional_parameters=["state", "limit"],
+    ),
+    ConnectorOperationDescriptor(
+        operation="create_pull_request",
+        description="Create a new pull request in a repository",
+        capability_type=CapabilityType.REPOSITORY,
+        read_only=False,
+        required_parameters=["repo_id", "title", "head"],
+        optional_parameters=["base", "body"],
+    ),
+    ConnectorOperationDescriptor(
+        operation="add_review_comment",
+        description="Add a review comment to a pull request",
+        capability_type=CapabilityType.REPOSITORY,
+        read_only=False,
+        required_parameters=["repo_id", "pr_id", "body"],
+        optional_parameters=[],
+    ),
 ]
 
 
@@ -179,6 +211,33 @@ class BaseRepositoryProvider(ABC):
                 repo_id=params["repo_id"],
                 pr_id=params["pr_id"],
             )
+        if op == "create_issue":
+            return await self._create_issue(
+                repo_id=params["repo_id"],
+                title=params["title"],
+                body=params.get("body", ""),
+                labels=params.get("labels"),
+            )
+        if op == "list_issues":
+            return await self._list_issues(
+                repo_id=params["repo_id"],
+                state=params.get("state", "open"),
+                limit=int(params.get("limit", _DEFAULT_LIMIT)),
+            )
+        if op == "create_pull_request":
+            return await self._create_pull_request(
+                repo_id=params["repo_id"],
+                title=params["title"],
+                head=params["head"],
+                base=params.get("base", "main"),
+                body=params.get("body", ""),
+            )
+        if op == "add_review_comment":
+            return await self._add_review_comment(
+                repo_id=params["repo_id"],
+                pr_id=params["pr_id"],
+                body=params["body"],
+            )
         return None, None
 
     @abstractmethod
@@ -210,6 +269,53 @@ class BaseRepositoryProvider(ABC):
         repo_id: str,
         pr_id: str,
     ) -> tuple[dict, ConnectorCostInfo | None]: ...
+
+    async def _create_issue(
+        self,
+        repo_id: str,
+        title: str,
+        body: str,
+        labels: list[str] | None,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """Create a new issue in a repository. Optional — subclasses may override."""
+        raise RepositoryProviderError(
+            f"{self.provider_id} does not support create_issue"
+        )
+
+    async def _list_issues(
+        self,
+        repo_id: str,
+        state: str,
+        limit: int,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """List issues in a repository. Optional — subclasses may override."""
+        raise RepositoryProviderError(
+            f"{self.provider_id} does not support list_issues"
+        )
+
+    async def _create_pull_request(
+        self,
+        repo_id: str,
+        title: str,
+        head: str,
+        base: str,
+        body: str,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """Create a pull request. Optional — subclasses may override."""
+        raise RepositoryProviderError(
+            f"{self.provider_id} does not support create_pull_request"
+        )
+
+    async def _add_review_comment(
+        self,
+        repo_id: str,
+        pr_id: str,
+        body: str,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """Add a review comment to a PR. Optional — subclasses may override."""
+        raise RepositoryProviderError(
+            f"{self.provider_id} does not support add_review_comment"
+        )
 
     # ------------------------------------------------------------------
     # Static artifact factory helpers
@@ -463,6 +569,139 @@ class BaseRepositoryProvider(ABC):
             provider=provider,
             capability_type=CapabilityType.REPOSITORY,
             resource_type="pull_request",
+            raw_payload=raw_payload,
+            normalized_payload=normalized,
+            references=references or [],
+            provenance=provenance,
+        )
+
+    @staticmethod
+    def _make_issue_artifact(
+        provider: str,
+        connector_id: str,
+        issue_id: str,
+        title: str,
+        body: str | None,
+        state: str | None,
+        url: str | None,
+        raw_payload: dict,
+        provenance: dict,
+        references: list[ExternalReference] | None = None,
+    ) -> ExternalArtifact:
+        """Wrap an issue in a platform-standard ExternalArtifact.
+
+        Args:
+            provider: Provider ID.
+            connector_id: Connector ID.
+            issue_id: Issue number or ID (string).
+            title: Issue title.
+            body: Issue body text, or None.
+            state: Issue state (e.g. "open", "closed"), or None.
+            url: Web URL of the issue, or None.
+            raw_payload: Raw provider API response dict.
+            provenance: Provenance dict.
+            references: Optional list of ExternalReference.
+
+        Returns:
+            ExternalArtifact with resource_type "issue".
+        """
+        normalized: dict = {
+            "issue_id": issue_id,
+            "title": title,
+            "body": body,
+            "state": state,
+            "url": url,
+        }
+        return ExternalArtifact(
+            source_connector=connector_id,
+            provider=provider,
+            capability_type=CapabilityType.REPOSITORY,
+            resource_type="issue",
+            raw_payload=raw_payload,
+            normalized_payload=normalized,
+            references=references or [],
+            provenance=provenance,
+        )
+
+    @staticmethod
+    def _make_issue_list_artifact(
+        provider: str,
+        connector_id: str,
+        repo_id: str,
+        state: str,
+        items: list[dict],
+        total: int,
+        provenance: dict,
+    ) -> ExternalArtifact:
+        """Wrap a list of issues in a platform-standard ExternalArtifact.
+
+        Args:
+            provider: Provider ID.
+            connector_id: Connector ID.
+            repo_id: Repository identifier.
+            state: Issue state filter used.
+            items: List of issue summary dicts.
+            total: Number of issues returned.
+            provenance: Provenance dict.
+
+        Returns:
+            ExternalArtifact with resource_type "issue_list".
+        """
+        return ExternalArtifact(
+            source_connector=connector_id,
+            provider=provider,
+            capability_type=CapabilityType.REPOSITORY,
+            resource_type="issue_list",
+            raw_payload={
+                "repo_id": repo_id,
+                "state": state,
+                "total": total,
+                "items": items,
+            },
+            normalized_payload=None,
+            references=[],
+            provenance=provenance,
+        )
+
+    @staticmethod
+    def _make_review_comment_artifact(
+        provider: str,
+        connector_id: str,
+        comment_id: str,
+        pr_id: str,
+        body: str,
+        url: str | None,
+        raw_payload: dict,
+        provenance: dict,
+        references: list[ExternalReference] | None = None,
+    ) -> ExternalArtifact:
+        """Wrap a review comment in a platform-standard ExternalArtifact.
+
+        Args:
+            provider: Provider ID.
+            connector_id: Connector ID.
+            comment_id: Comment ID (string).
+            pr_id: Pull request number (string).
+            body: Comment body text.
+            url: Web URL of the comment, or None.
+            raw_payload: Raw provider API response dict.
+            provenance: Provenance dict.
+            references: Optional list of ExternalReference.
+
+        Returns:
+            ExternalArtifact with resource_type "review_comment".
+        """
+        normalized: dict = {
+            "comment_id": comment_id,
+            "pr_id": pr_id,
+            "body": body,
+            "url": url,
+        }
+        return ExternalArtifact(
+            source_connector=connector_id,
+            provider=provider,
+            capability_type=CapabilityType.REPOSITORY,
+            resource_type="review_comment",
             raw_payload=raw_payload,
             normalized_payload=normalized,
             references=references or [],

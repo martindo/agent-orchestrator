@@ -53,6 +53,22 @@ _TICKETING_OPS: list[ConnectorOperationDescriptor] = [
         required_parameters=["query"],
         optional_parameters=["limit"],
     ),
+    ConnectorOperationDescriptor(
+        operation="transition_ticket",
+        description="Transition a ticket to a new workflow state",
+        capability_type=CapabilityType.TICKETING,
+        read_only=False,
+        required_parameters=["ticket_id", "transition_name"],
+        optional_parameters=[],
+    ),
+    ConnectorOperationDescriptor(
+        operation="get_sprint_issues",
+        description="List all issues assigned to a specific sprint",
+        capability_type=CapabilityType.TICKETING,
+        read_only=True,
+        required_parameters=["sprint_id"],
+        optional_parameters=["board_id"],
+    ),
 ]
 
 
@@ -178,6 +194,16 @@ class BaseTicketingProvider(ABC):
                 query=params["query"],
                 limit=int(params.get("limit", 25)),
             )
+        if op == "transition_ticket":
+            return await self._transition_ticket(
+                ticket_id=params["ticket_id"],
+                transition_name=params["transition_name"],
+            )
+        if op == "get_sprint_issues":
+            return await self._get_sprint_issues(
+                sprint_id=int(params["sprint_id"]),
+                board_id=int(params["board_id"]) if params.get("board_id") else None,
+            )
         return None, None
 
     @abstractmethod
@@ -210,6 +236,26 @@ class BaseTicketingProvider(ABC):
         query: str,
         limit: int,
     ) -> tuple[dict, ConnectorCostInfo | None]: ...
+
+    async def _transition_ticket(
+        self,
+        ticket_id: str,
+        transition_name: str,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """Transition a ticket to a new workflow state. Optional -- subclasses may override."""
+        raise TicketingProviderError(
+            f"{self.provider_id} does not support transition_ticket"
+        )
+
+    async def _get_sprint_issues(
+        self,
+        sprint_id: int,
+        board_id: int | None,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """List issues in a sprint. Optional -- subclasses may override."""
+        raise TicketingProviderError(
+            f"{self.provider_id} does not support get_sprint_issues"
+        )
 
     @staticmethod
     def _make_ticket_artifact(

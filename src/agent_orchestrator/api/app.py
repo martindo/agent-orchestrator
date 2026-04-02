@@ -12,7 +12,10 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from agent_orchestrator.api.benchmark_routes import benchmark_router
+from agent_orchestrator.api.connector_instances_routes import router as connector_instances_router
+from agent_orchestrator.api.branching_routes import router as branching_router
 from agent_orchestrator.api.bulk_import_routes import bulk_router
+from agent_orchestrator.api.communication_routes import router as communication_router
 from agent_orchestrator.api.cost_routes import router as cost_router
 from agent_orchestrator.api.dashboard_routes import dashboard_router
 from agent_orchestrator.api.websocket_events import ws_manager
@@ -21,6 +24,7 @@ from agent_orchestrator.api.eval_routes import eval_router
 from agent_orchestrator.api.knowledge_routes import knowledge_router
 from agent_orchestrator.api.ledger_routes import ledger_router
 from agent_orchestrator.api.lineage_routes import lineage_router
+from agent_orchestrator.api.scheduler_routes import router as scheduler_router
 from agent_orchestrator.api.simulation_routes import simulation_router
 from agent_orchestrator.api.skillmap_routes import skillmap_router
 from agent_orchestrator.api.routes import (
@@ -115,6 +119,10 @@ def create_app(
     app.include_router(cost_router, prefix=API_PREFIX, tags=["cost"])
     app.include_router(dashboard_router, prefix=API_PREFIX, tags=["dashboard"])
     app.include_router(bulk_router, prefix=API_PREFIX, tags=["bulk"])
+    app.include_router(communication_router, prefix=API_PREFIX, tags=["communication"])
+    app.include_router(branching_router, prefix=API_PREFIX, tags=["branching"])
+    app.include_router(scheduler_router, prefix=API_PREFIX, tags=["schedules"])
+    app.include_router(connector_instances_router, prefix=API_PREFIX, tags=["connector-instances"])
 
     # WebSocket endpoint for real-time event streaming
     @app.websocket("/ws/events")

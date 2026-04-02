@@ -314,3 +314,238 @@ class SlackMessagingProvider(BaseMessagingProvider):
         )
 
         return artifact.model_dump(mode="json"), None
+
+    async def _send_notification(
+        self,
+        destination: str,
+        title: str,
+        content: str,
+        color: str,
+        fields: list[dict] | None,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """Send a rich Block Kit notification to a Slack channel.
+
+        Composes a message with a header block, a section block for the
+        message body, and optional field blocks.
+
+        Args:
+            destination: Slack channel ID or name.
+            title: Notification title (rendered as a Block Kit header).
+            content: Notification body text (rendered as mrkdwn).
+            color: Hex color string (used in fallback text only).
+            fields: Optional list of dicts with ``label`` and ``value`` keys.
+
+        Returns:
+            Tuple of (ExternalArtifact dict, None -- no API cost).
+
+        Raises:
+            MessagingProviderError: When the Slack API returns an error.
+        """
+        blocks: list[dict] = [
+            {"type": "header", "text": {"type": "plain_text", "text": title}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": content}},
+        ]
+        if fields:
+            field_elements = [
+                {"type": "mrkdwn", "text": f"*{f['label']}:*\n{f['value']}"}
+                for f in fields
+            ]
+            blocks.append({"type": "section", "fields": field_elements})
+
+        fallback_text = f"{title}: {content}"
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    self._api_url("chat.postMessage"),
+                    headers=self._auth_headers(),
+                    json={
+                        "channel": destination,
+                        "text": fallback_text,
+                        "blocks": blocks,
+                    },
+                )
+                response.raise_for_status()
+                data: dict = response.json()
+        except httpx.HTTPError as exc:
+            raise MessagingProviderError(f"Slack HTTP error: {exc}") from exc
+
+        if not data.get("ok"):
+            raise MessagingProviderError(
+                f"Slack error: {data.get('error', 'unknown')}"
+            )
+
+        ts: str = data.get("ts", "")
+        channel: str = data.get("channel", destination)
+
+        refs: list[ExternalReference] = [
+            ExternalReference(
+                provider=self.provider_id,
+                resource_type="slack_message",
+                external_id=ts,
+                url=None,
+                metadata={"channel": channel},
+            )
+        ]
+
+        artifact = self._make_message_artifact(
+            provider=self.provider_id,
+            connector_id=self.provider_id,
+            message_id=ts,
+            channel=channel,
+            sender="bot",
+            recipients=[destination],
+            subject=title,
+            body=content,
+            raw_payload=data,
+            resource_type="notification",
+            provenance={"provider": "slack"},
+            references=refs,
+        )
+
+        logger.info(
+            "Slack send_notification: channel=%r title=%r ts=%r",
+            channel,
+            title,
+            ts,
+        )
+        return artifact.model_dump(mode="json"), None
+
+    async def _list_channels(
+        self,
+        limit: int,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """List public and private channels the bot has access to.
+
+        Args:
+            limit: Maximum number of channels to return.
+
+        Returns:
+            Tuple of (ExternalArtifact dict with channel list, None -- no API cost).
+
+        Raises:
+            MessagingProviderError: When the Slack API returns an error.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    self._api_url("conversations.list"),
+                    headers=self._auth_headers(),
+                    params={
+                        "types": "public_channel,private_channel",
+                        "limit": min(limit, 1000),
+                    },
+                )
+                response.raise_for_status()
+                data: dict = response.json()
+        except httpx.HTTPError as exc:
+            raise MessagingProviderError(f"Slack HTTP error: {exc}") from exc
+
+        if not data.get("ok"):
+            raise MessagingProviderError(
+                f"Slack error: {data.get('error', 'unknown')}"
+            )
+
+        channels = data.get("channels", [])
+        items = [
+            {
+                "id": c.get("id", ""),
+                "name": c.get("name", ""),
+                "is_private": c.get("is_private", False),
+            }
+            for c in channels
+        ]
+
+        from ...models import ExternalArtifact, CapabilityType
+        artifact = ExternalArtifact(
+            source_connector=self.provider_id,
+            provider=self.provider_id,
+            capability_type=CapabilityType.MESSAGING,
+            resource_type="channel_list",
+            raw_payload={"total": len(items), "channels": items},
+            normalized_payload=None,
+            references=[],
+            provenance={"provider": "slack"},
+        )
+
+        logger.info("Slack list_channels: count=%d", len(items))
+        return artifact.model_dump(mode="json"), None
+
+    async def _upload_file(
+        self,
+        destination: str,
+        content: str,
+        filename: str,
+        title: str,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """Upload text content as a file to a Slack channel.
+
+        Args:
+            destination: Slack channel ID or name.
+            content: File content string.
+            filename: Filename for the upload.
+            title: File title displayed in Slack.
+
+        Returns:
+            Tuple of (ExternalArtifact dict, None -- no API cost).
+
+        Raises:
+            MessagingProviderError: When the Slack API returns an error.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    self._api_url("files.upload"),
+                    headers={"Authorization": f"Bearer {self._api_token}"},
+                    data={
+                        "channels": destination,
+                        "content": content,
+                        "filename": filename,
+                        "title": title or filename,
+                    },
+                )
+                response.raise_for_status()
+                data: dict = response.json()
+        except httpx.HTTPError as exc:
+            raise MessagingProviderError(f"Slack HTTP error: {exc}") from exc
+
+        if not data.get("ok"):
+            raise MessagingProviderError(
+                f"Slack error: {data.get('error', 'unknown')}"
+            )
+
+        file_info = data.get("file", {})
+        file_id: str = file_info.get("id", "")
+
+        refs: list[ExternalReference] = [
+            ExternalReference(
+                provider=self.provider_id,
+                resource_type="slack_file",
+                external_id=file_id,
+                url=file_info.get("permalink"),
+                metadata={"channel": destination, "filename": filename},
+            )
+        ]
+
+        artifact = self._make_message_artifact(
+            provider=self.provider_id,
+            connector_id=self.provider_id,
+            message_id=file_id,
+            channel=destination,
+            sender="bot",
+            recipients=[destination],
+            subject=title or filename,
+            body=None,
+            raw_payload=data,
+            resource_type="file_upload",
+            provenance={"provider": "slack"},
+            references=refs,
+        )
+
+        logger.info(
+            "Slack upload_file: channel=%r filename=%r file_id=%r",
+            destination,
+            filename,
+            file_id,
+        )
+        return artifact.model_dump(mode="json"), None

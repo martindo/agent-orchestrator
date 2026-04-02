@@ -45,6 +45,30 @@ _MESSAGING_OPS: list[ConnectorOperationDescriptor] = [
         required_parameters=["destination", "title", "content"],
         optional_parameters=[],
     ),
+    ConnectorOperationDescriptor(
+        operation="send_notification",
+        description="Send a rich notification with title, message, and optional fields",
+        capability_type=CapabilityType.MESSAGING,
+        read_only=False,
+        required_parameters=["destination", "title", "content"],
+        optional_parameters=["color", "fields"],
+    ),
+    ConnectorOperationDescriptor(
+        operation="list_channels",
+        description="List available channels or rooms",
+        capability_type=CapabilityType.MESSAGING,
+        read_only=True,
+        required_parameters=[],
+        optional_parameters=["limit"],
+    ),
+    ConnectorOperationDescriptor(
+        operation="upload_file",
+        description="Upload file content to a channel",
+        capability_type=CapabilityType.MESSAGING,
+        read_only=False,
+        required_parameters=["destination", "content", "filename"],
+        optional_parameters=["title"],
+    ),
 ]
 
 
@@ -118,6 +142,25 @@ class BaseMessagingProvider(ABC):
                     title=params["title"],
                     content=params["content"],
                 )
+            elif op == "send_notification":
+                payload, cost_info = await self._send_notification(
+                    destination=params["destination"],
+                    title=params["title"],
+                    content=params["content"],
+                    color=params.get("color", "#36a64f"),
+                    fields=params.get("fields"),
+                )
+            elif op == "list_channels":
+                payload, cost_info = await self._list_channels(
+                    limit=int(params.get("limit", 100)),
+                )
+            elif op == "upload_file":
+                payload, cost_info = await self._upload_file(
+                    destination=params["destination"],
+                    content=params["content"],
+                    filename=params["filename"],
+                    title=params.get("title", ""),
+                )
             else:
                 return ConnectorInvocationResult(
                     request_id=request.request_id,
@@ -175,6 +218,40 @@ class BaseMessagingProvider(ABC):
         title: str,
         content: str,
     ) -> tuple[dict, ConnectorCostInfo | None]: ...
+
+    async def _send_notification(
+        self,
+        destination: str,
+        title: str,
+        content: str,
+        color: str,
+        fields: list[dict] | None,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """Send a rich notification. Optional -- subclasses may override."""
+        raise MessagingProviderError(
+            f"{self.provider_id} does not support send_notification"
+        )
+
+    async def _list_channels(
+        self,
+        limit: int,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """List available channels. Optional -- subclasses may override."""
+        raise MessagingProviderError(
+            f"{self.provider_id} does not support list_channels"
+        )
+
+    async def _upload_file(
+        self,
+        destination: str,
+        content: str,
+        filename: str,
+        title: str,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """Upload file content to a channel. Optional -- subclasses may override."""
+        raise MessagingProviderError(
+            f"{self.provider_id} does not support upload_file"
+        )
 
     @staticmethod
     def _make_message_artifact(

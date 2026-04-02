@@ -75,6 +75,31 @@ class GitHubRepositoryProvider(BaseRepositoryProvider):
         """Build a full GitHub API URL."""
         return f"{_GITHUB_API_BASE}/{path}"
 
+    async def _post(self, path: str, json_body: dict) -> dict:
+        """Perform an authenticated POST and return the parsed JSON body.
+
+        Args:
+            path: API path relative to the GitHub API base.
+            json_body: JSON payload to send.
+
+        Returns:
+            Parsed JSON body as dict.
+
+        Raises:
+            RepositoryProviderError: On HTTP errors.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    self._api_url(path),
+                    headers=self._auth_headers(),
+                    json=json_body,
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPError as exc:
+            raise RepositoryProviderError(f"GitHub HTTP error: {exc}") from exc
+
     async def _get(self, path: str, params: dict | None = None) -> dict | list:
         """Perform an authenticated GET and return the parsed JSON body.
 
@@ -287,6 +312,206 @@ class GitHubRepositoryProvider(BaseRepositoryProvider):
         logger.info("GitHub get_pull_request: repo=%r pr=%r", repo_id, pr_id)
         return artifact.model_dump(mode="json"), None
 
+    async def _create_issue(
+        self,
+        repo_id: str,
+        title: str,
+        body: str,
+        labels: list[str] | None,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """Create a new issue in a GitHub repository.
+
+        Args:
+            repo_id: Repository full name, e.g. ``"owner/repo"``.
+            title: Issue title.
+            body: Issue body text.
+            labels: Optional list of label names.
+
+        Returns:
+            Tuple of (ExternalArtifact dict, None -- no tracked API cost).
+
+        Raises:
+            RepositoryProviderError: On HTTP or API errors.
+        """
+        payload: dict = {"title": title, "body": body}
+        if labels:
+            payload["labels"] = labels
+
+        data = await self._post(f"repos/{repo_id}/issues", payload)
+        url: str | None = data.get("html_url")
+
+        refs: list[ExternalReference] = [
+            ExternalReference(
+                provider=self.provider_id,
+                resource_type="github_issue",
+                external_id=str(data.get("number", "")),
+                url=url,
+                metadata={"repo": repo_id},
+            )
+        ]
+
+        artifact = self._make_issue_artifact(
+            provider=self.provider_id,
+            connector_id=self.provider_id,
+            issue_id=str(data.get("number", "")),
+            title=data.get("title", title),
+            body=data.get("body"),
+            state=data.get("state"),
+            url=url,
+            raw_payload=data,
+            provenance={"provider": "github", "repo": repo_id},
+            references=refs,
+        )
+        logger.info("GitHub create_issue: repo=%r issue=#%s", repo_id, data.get("number"))
+        return artifact.model_dump(mode="json"), None
+
+    async def _list_issues(
+        self,
+        repo_id: str,
+        state: str,
+        limit: int,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """List issues in a GitHub repository.
+
+        Args:
+            repo_id: Repository full name, e.g. ``"owner/repo"``.
+            state: Issue state filter ("open", "closed", "all").
+            limit: Maximum number of issues to return.
+
+        Returns:
+            Tuple of (ExternalArtifact dict, None -- no tracked API cost).
+
+        Raises:
+            RepositoryProviderError: On HTTP or API errors.
+        """
+        data = await self._get(
+            f"repos/{repo_id}/issues",
+            params={"state": state, "per_page": min(limit, 100)},
+        )
+        items = _parse_github_issues(data)  # type: ignore[arg-type]
+
+        artifact = self._make_issue_list_artifact(
+            provider=self.provider_id,
+            connector_id=self.provider_id,
+            repo_id=repo_id,
+            state=state,
+            items=items,
+            total=len(items),
+            provenance={"provider": "github", "repo": repo_id, "state": state},
+        )
+        logger.info("GitHub list_issues: repo=%r state=%r count=%d", repo_id, state, len(items))
+        return artifact.model_dump(mode="json"), None
+
+    async def _create_pull_request(
+        self,
+        repo_id: str,
+        title: str,
+        head: str,
+        base: str,
+        body: str,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """Create a new pull request in a GitHub repository.
+
+        Args:
+            repo_id: Repository full name, e.g. ``"owner/repo"``.
+            title: PR title.
+            head: Head branch name.
+            base: Base branch name.
+            body: PR body text.
+
+        Returns:
+            Tuple of (ExternalArtifact dict, None -- no tracked API cost).
+
+        Raises:
+            RepositoryProviderError: On HTTP or API errors.
+        """
+        data = await self._post(
+            f"repos/{repo_id}/pulls",
+            {"title": title, "head": head, "base": base, "body": body},
+        )
+        url: str | None = data.get("html_url")
+
+        refs: list[ExternalReference] = [
+            ExternalReference(
+                provider=self.provider_id,
+                resource_type="github_pull_request",
+                external_id=str(data.get("number", "")),
+                url=url,
+                metadata={"repo": repo_id},
+            )
+        ]
+
+        artifact = self._make_pr_artifact(
+            provider=self.provider_id,
+            connector_id=self.provider_id,
+            repo_id=repo_id,
+            pr_id=str(data.get("number", "")),
+            title=data.get("title", title),
+            description=data.get("body"),
+            state=data.get("state"),
+            author=_nested_login(data.get("user")),
+            source_branch=_nested_ref(data.get("head")),
+            target_branch=_nested_ref(data.get("base")),
+            url=url,
+            raw_payload=data,
+            provenance={"provider": "github", "repo": repo_id},
+            references=refs,
+        )
+        logger.info("GitHub create_pull_request: repo=%r pr=#%s", repo_id, data.get("number"))
+        return artifact.model_dump(mode="json"), None
+
+    async def _add_review_comment(
+        self,
+        repo_id: str,
+        pr_id: str,
+        body: str,
+    ) -> tuple[dict, ConnectorCostInfo | None]:
+        """Add a review comment to a GitHub pull request.
+
+        Posts to the issue comments endpoint (general PR comment, not
+        line-level review comment).
+
+        Args:
+            repo_id: Repository full name, e.g. ``"owner/repo"``.
+            pr_id: Pull request number (as a string).
+            body: Comment body text.
+
+        Returns:
+            Tuple of (ExternalArtifact dict, None -- no tracked API cost).
+
+        Raises:
+            RepositoryProviderError: On HTTP or API errors.
+        """
+        data = await self._post(
+            f"repos/{repo_id}/issues/{pr_id}/comments",
+            {"body": body},
+        )
+        url: str | None = data.get("html_url")
+
+        refs: list[ExternalReference] = [
+            ExternalReference(
+                provider=self.provider_id,
+                resource_type="github_comment",
+                external_id=str(data.get("id", "")),
+                url=url,
+                metadata={"repo": repo_id, "pr": pr_id},
+            )
+        ]
+
+        artifact = self._make_review_comment_artifact(
+            provider=self.provider_id,
+            connector_id=self.provider_id,
+            comment_id=str(data.get("id", "")),
+            pr_id=pr_id,
+            body=data.get("body", body),
+            url=url,
+            raw_payload=data,
+            provenance={"provider": "github", "repo": repo_id, "pr": pr_id},
+            references=refs,
+        )
+        logger.info("GitHub add_review_comment: repo=%r pr=#%s", repo_id, pr_id)
+        return artifact.model_dump(mode="json"), None
+
 
 # ---------------------------------------------------------------------------
 # Module-level helpers — keep provider methods short
@@ -342,6 +567,25 @@ def _parse_github_commits(data: list) -> list[dict]:
             "url": entry.get("html_url"),
         })
     return commits
+
+
+def _parse_github_issues(data: list) -> list[dict]:
+    """Normalise a GitHub /repos/{repo}/issues response to a list of issue dicts.
+
+    Filters out pull requests (GitHub returns PRs on the issues endpoint).
+    """
+    issues: list[dict] = []
+    for entry in data:
+        if "pull_request" in entry:
+            continue
+        issues.append({
+            "issue_id": str(entry.get("number", "")),
+            "title": entry.get("title", ""),
+            "state": entry.get("state"),
+            "url": entry.get("html_url"),
+            "labels": [lbl.get("name", "") for lbl in entry.get("labels", [])],
+        })
+    return issues
 
 
 def _nested_login(value: object) -> str | None:
