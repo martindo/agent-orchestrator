@@ -9,9 +9,13 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from agent_orchestrator.api.benchmark_routes import benchmark_router
+from agent_orchestrator.api.bulk_import_routes import bulk_router
+from agent_orchestrator.api.cost_routes import router as cost_router
+from agent_orchestrator.api.dashboard_routes import dashboard_router
+from agent_orchestrator.api.websocket_events import ws_manager
 from agent_orchestrator.api.catalog_routes import catalog_router
 from agent_orchestrator.api.eval_routes import eval_router
 from agent_orchestrator.api.knowledge_routes import knowledge_router
@@ -108,6 +112,20 @@ def create_app(
     app.include_router(lineage_router, prefix=API_PREFIX, tags=["lineage"])
     app.include_router(benchmark_router, prefix=API_PREFIX, tags=["benchmarks"])
     app.include_router(eval_router, prefix=API_PREFIX, tags=["evals"])
+    app.include_router(cost_router, prefix=API_PREFIX, tags=["cost"])
+    app.include_router(dashboard_router, prefix=API_PREFIX, tags=["dashboard"])
+    app.include_router(bulk_router, prefix=API_PREFIX, tags=["bulk"])
+
+    # WebSocket endpoint for real-time event streaming
+    @app.websocket("/ws/events")
+    async def websocket_events(websocket: WebSocket) -> None:
+        await ws_manager.connect(websocket)
+        try:
+            while True:
+                # Keep connection alive; receive optional client messages (ping/subscribe)
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            ws_manager.disconnect(websocket)
 
     # Mount MCP server if engine has MCP config enabled
     _try_mount_mcp(app, engine)

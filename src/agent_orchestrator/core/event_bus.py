@@ -192,6 +192,35 @@ class EventBus:
         tasks = [self._safe_call(handler, event) for handler in all_handlers]
         await asyncio.gather(*tasks)
 
+        # Bridge to WebSocket event stream
+        await self._broadcast_to_websocket(event)
+
+    async def _broadcast_to_websocket(self, event: Event) -> None:
+        """Forward an event to WebSocket clients if the manager is available.
+
+        Imports lazily to avoid circular imports. Silently skips if no
+        WebSocket manager is available or no event loop is running.
+
+        Args:
+            event: The event to broadcast.
+        """
+        try:
+            from agent_orchestrator.api.websocket_events import ws_manager
+            event_data = {
+                "source": event.source,
+                "timestamp": event.timestamp.isoformat(),
+                "app_id": event.app_id,
+                "run_id": event.run_id,
+                **event.data,
+            }
+            await ws_manager.broadcast(event.type.value, event_data)
+        except ImportError:
+            pass  # API module not installed / not in path
+        except RuntimeError:
+            pass  # No event loop running (during testing)
+        except Exception as exc:
+            logger.debug("WebSocket broadcast failed: %s", exc)
+
     async def _safe_call(self, handler: EventHandler, event: Event) -> None:
         """Call a handler, catching and logging any errors."""
         try:
