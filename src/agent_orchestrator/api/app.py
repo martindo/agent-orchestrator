@@ -12,12 +12,15 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from agent_orchestrator.api.benchmark_routes import benchmark_router
+from agent_orchestrator.api.auth_routes import router as auth_router
 from agent_orchestrator.api.connector_instances_routes import router as connector_instances_router
 from agent_orchestrator.api.branching_routes import router as branching_router
 from agent_orchestrator.api.bulk_import_routes import bulk_router
 from agent_orchestrator.api.communication_routes import router as communication_router
 from agent_orchestrator.api.cost_routes import router as cost_router
 from agent_orchestrator.api.dashboard_routes import dashboard_router
+from agent_orchestrator.api.platform_cost_routes import router as platform_cost_router
+from agent_orchestrator.api.plugin_routes import router as plugin_router
 from agent_orchestrator.api.websocket_events import ws_manager
 from agent_orchestrator.api.catalog_routes import catalog_router
 from agent_orchestrator.api.eval_routes import eval_router
@@ -26,6 +29,7 @@ from agent_orchestrator.api.ledger_routes import ledger_router
 from agent_orchestrator.api.lineage_routes import lineage_router
 from agent_orchestrator.api.scheduler_routes import router as scheduler_router
 from agent_orchestrator.api.simulation_routes import simulation_router
+from agent_orchestrator.api.tenant_routes import router as tenant_router
 from agent_orchestrator.api.skillmap_routes import skillmap_router
 from agent_orchestrator.api.routes import (
     agents_router,
@@ -123,6 +127,10 @@ def create_app(
     app.include_router(branching_router, prefix=API_PREFIX, tags=["branching"])
     app.include_router(scheduler_router, prefix=API_PREFIX, tags=["schedules"])
     app.include_router(connector_instances_router, prefix=API_PREFIX, tags=["connector-instances"])
+    app.include_router(platform_cost_router, prefix=API_PREFIX, tags=["platform-costs"])
+    app.include_router(auth_router, prefix=API_PREFIX, tags=["auth"])
+    app.include_router(tenant_router, prefix=API_PREFIX, tags=["tenants"])
+    app.include_router(plugin_router, prefix=API_PREFIX, tags=["plugins"])
 
     # WebSocket endpoint for real-time event streaming
     @app.websocket("/ws/events")
