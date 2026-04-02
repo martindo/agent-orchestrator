@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from agent_orchestrator.configuration.loader import save_settings
 from agent_orchestrator.configuration.models import PolicyConfig
 from agent_orchestrator.configuration.validator import validate_profile
-from agent_orchestrator.exceptions import AgentError, ConfigurationError, OrchestratorError
+from agent_orchestrator.exceptions import AgentError, ConfigurationError, OrchestratorError, ProfileError
 from agent_orchestrator.core.event_bus import Event, EventType
 from agent_orchestrator.governance.audit_logger import RecordType
 
@@ -1096,6 +1096,41 @@ async def export_profile_component(
         return config_manager.get_profile_component(component)
     except ConfigurationError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+class SwitchProfileRequest(BaseModel):
+    """Request body for switching the active profile."""
+    profile_name: str
+
+
+@config_router.put("/config/profile", response_model=ProfileListResponse)
+async def switch_profile(body: SwitchProfileRequest, request: Request) -> ProfileListResponse:
+    """Switch the active profile and reload configuration.
+
+    Called by AO Studio deployer after writing profile files to disk.
+    """
+    config_mgr = getattr(request.app.state, "config_manager", None)
+    if config_mgr is None:
+        raise HTTPException(status_code=503, detail="Configuration manager not initialized")
+
+    try:
+        config_mgr.switch_profile(body.profile_name)
+    except ProfileError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ConfigurationError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+    engine = getattr(request.app.state, "engine", None)
+    if engine is not None and hasattr(engine, "reload_config"):
+        try:
+            engine.reload_config()
+            logger.info("Engine reloaded after profile switch to '%s'", body.profile_name)
+        except Exception:
+            logger.warning("Engine reload failed after profile switch", exc_info=True)
+
+    profiles = config_mgr.list_profiles()
+    active = config_mgr.get_settings().active_profile
+    return ProfileListResponse(profiles=profiles, active=active)
 
 
 @config_router.get("/config/profiles", response_model=ProfileListResponse)

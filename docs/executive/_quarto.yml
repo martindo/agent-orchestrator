@@ -1,0 +1,37 @@
+project:
+  type: default
+
+format:
+  pdf:
+    documentclass: article
+    papersize: letter
+    geometry:
+      - margin=1in
+    fontsize: 11pt
+    colorlinks: true
+    linkcolor: "blue"
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-block-bg: "#f5f5f5"
+    code-block-border-left: "#cccccc"
+    highlight-style: github
+    include-before-body:
+      - text: |
+          \begin{center}
+          \vspace*{2cm}
+          \includegraphics[width=0.5\textwidth]{images/logo.png}\\[1cm]
+          {\Huge\bfseries Agent Orchestrator}\\[0.5cm]
+          {\LARGE Executive Overview}\\[0.5cm]
+          {\large Version 1.0}\\[1cm]
+          {\large\today}
+          \vspace*{2cm}
+          \end{center}
+          \newpage
+  html:
+    theme: cosmo
+    toc: true
+    number-sections: true
+  docx:
+    toc: true
+    number-sections: true
