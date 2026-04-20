@@ -34,3 +34,7 @@ Thumbs.db
 
 # Stray artifacts
 0.21
+
+# Local workspace state (contains secrets)
+workspace/settings.yaml
+workspace/.agent-orchestrator/
