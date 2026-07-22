@@ -114,41 +114,34 @@ def _compute_content_hash(data: Any) -> str:
     return hashlib.sha256(serialized.encode()).hexdigest()
 
 
-def _compute_record_hash(record: DecisionRecord) -> str:
-    """Compute the cryptographic hash of a decision record.
+def _record_to_dict(record: DecisionRecord) -> dict[str, Any]:
+    """Canonical serializable dict for a record (enums → their string values).
 
-    Uses the full record content (excluding the record_hash field itself)
-    to produce a SHA-256 digest. This ensures that any modification to
-    any field is detectable.
-
-    Args:
-        record: The decision record to hash.
-
-    Returns:
-        Full hex-encoded SHA-256 digest.
+    This is the exact representation written to the ledger and hashed, so the
+    hash covers precisely what is stored.
     """
-    hash_input = {
-        "decision_id": record.decision_id,
-        "sequence": record.sequence,
-        "decision_type": record.decision_type.value,
-        "outcome": record.outcome.value,
-        "agent_id": record.agent_id,
-        "work_item_id": record.work_item_id,
-        "phase_id": record.phase_id,
-        "run_id": record.run_id,
-        "app_id": record.app_id,
-        "input_hash": record.input_hash,
-        "output_hash": record.output_hash,
-        "reasoning_summary": record.reasoning_summary,
-        "confidence": record.confidence,
-        "policy_result": record.policy_result,
-        "policy_id": record.policy_id,
-        "reviewer": record.reviewer,
-        "timestamp": record.timestamp,
-        "previous_hash": record.previous_hash,
-    }
-    serialized = json.dumps(hash_input, sort_keys=True)
+    d = asdict(record)
+    d["decision_type"] = record.decision_type.value
+    d["outcome"] = record.outcome.value
+    return d
+
+
+def _hash_record_dict(record_dict: dict[str, Any]) -> str:
+    """SHA-256 over the full record content — every field except record_hash.
+
+    Hashing the *entire* record (including tool_calls, warnings, review_notes,
+    duration_seconds and metadata) is what makes tampering detectable. The
+    previous implementation enumerated only 18 fields and silently left those
+    five outside the chain — editable without breaking verification.
+    """
+    to_hash = {k: v for k, v in record_dict.items() if k != "record_hash"}
+    serialized = json.dumps(to_hash, sort_keys=True, default=str)
     return hashlib.sha256(serialized.encode()).hexdigest()
+
+
+def _compute_record_hash(record: DecisionRecord) -> str:
+    """Compute the cryptographic hash of a decision record (full content)."""
+    return _hash_record_dict(_record_to_dict(record))
 
 
 class DecisionLedger:
@@ -307,9 +300,7 @@ class DecisionLedger:
 
     def _write_record(self, record: DecisionRecord) -> None:
         """Append a record to the JSONL ledger file."""
-        record_dict = asdict(record)
-        record_dict["decision_type"] = record.decision_type.value
-        record_dict["outcome"] = record.outcome.value
+        record_dict = _record_to_dict(record)
         try:
             with open(self._ledger_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record_dict, default=str) + "\n")
@@ -351,29 +342,10 @@ class DecisionLedger:
                             )
                             return False, count
 
-                        # Reconstruct record and verify its hash
+                        # Recompute the hash directly from the stored record so
+                        # EVERY field is verified (not just a hand-picked subset).
                         stored_hash = raw.get("record_hash", "")
-                        record = DecisionRecord(
-                            decision_id=raw["decision_id"],
-                            sequence=raw["sequence"],
-                            decision_type=DecisionType(raw["decision_type"]),
-                            outcome=DecisionOutcome(raw["outcome"]),
-                            agent_id=raw.get("agent_id", ""),
-                            work_item_id=raw.get("work_item_id", ""),
-                            phase_id=raw.get("phase_id", ""),
-                            run_id=raw.get("run_id", ""),
-                            app_id=raw.get("app_id", ""),
-                            input_hash=raw.get("input_hash", ""),
-                            output_hash=raw.get("output_hash", ""),
-                            reasoning_summary=raw.get("reasoning_summary", ""),
-                            confidence=raw.get("confidence", 0.0),
-                            policy_result=raw.get("policy_result", ""),
-                            policy_id=raw.get("policy_id", ""),
-                            reviewer=raw.get("reviewer", ""),
-                            timestamp=raw.get("timestamp", ""),
-                            previous_hash=raw.get("previous_hash", ""),
-                        )
-                        computed_hash = _compute_record_hash(record)
+                        computed_hash = _hash_record_dict(raw)
                         if computed_hash != stored_hash:
                             logger.error(
                                 "Decision record tampered at sequence %d: "
