@@ -105,12 +105,31 @@ class TestConstructorValidation:
 # ---------------------------------------------------------------------------
 
 
+_EXPECTED_REPOSITORY_OPS = {
+    "search_repo",
+    "get_file",
+    "list_commits",
+    "list_issues",
+    "get_pull_request",
+    "create_issue",
+    "create_pull_request",
+    "add_review_comment",
+}
+_REPOSITORY_READ_OPS = {
+    "search_repo",
+    "get_file",
+    "list_commits",
+    "list_issues",
+    "get_pull_request",
+}
+
+
 class TestDescriptorShape:
     def test_github_descriptor(self, github: GitHubRepositoryProvider) -> None:
         desc = github.get_descriptor()
         assert CapabilityType.REPOSITORY in desc.capability_types
         ops = {op.operation for op in desc.operations}
-        assert ops == {"search_repo", "get_file", "list_commits", "get_pull_request"}
+        assert ops == _EXPECTED_REPOSITORY_OPS
         assert desc.provider_id == "repository.github"
         assert desc.auth_required is True
 
@@ -118,12 +137,23 @@ class TestDescriptorShape:
         desc = gitlab.get_descriptor()
         assert CapabilityType.REPOSITORY in desc.capability_types
         ops = {op.operation for op in desc.operations}
-        assert ops == {"search_repo", "get_file", "list_commits", "get_pull_request"}
+        assert ops == _EXPECTED_REPOSITORY_OPS
         assert desc.provider_id == "repository.gitlab"
 
-    def test_all_ops_are_read_only(self) -> None:
+    def test_read_ops_are_read_only(self) -> None:
         for op in _REPOSITORY_OPS:
-            assert op.read_only is True, f"{op.operation} should be read_only=True"
+            if op.operation in _REPOSITORY_READ_OPS:
+                assert op.read_only is True, f"{op.operation} should be read_only=True"
+
+    def test_write_ops_are_not_read_only(self) -> None:
+        # NOTE: repository providers were originally read-only. They have since
+        # gained write operations (create_pull_request, create_issue,
+        # add_review_comment). With no auth enforced (see AUDIT-TASKS.md 2.1) and
+        # generic retry-on-failure (6.3), these writes are a real blast-radius
+        # increase — this assertion documents the current surface, not an endorsement.
+        for op in _REPOSITORY_OPS:
+            if op.operation not in _REPOSITORY_READ_OPS:
+                assert op.read_only is False, f"{op.operation} should be read_only=False"
 
 
 # ---------------------------------------------------------------------------

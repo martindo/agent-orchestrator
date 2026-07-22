@@ -108,34 +108,45 @@ class TestConstructorValidation:
 # ---------------------------------------------------------------------------
 
 
+_EXPECTED_MESSAGING_OPS = {
+    "send_message",
+    "notify_user",
+    "create_thread",
+    "list_channels",
+    "send_notification",
+    "upload_file",
+}
+
+
 class TestDescriptorShape:
     def test_slack_descriptor(self, slack_provider: SlackMessagingProvider) -> None:
         desc = slack_provider.get_descriptor()
         assert CapabilityType.MESSAGING in desc.capability_types
         ops = {op.operation for op in desc.operations}
-        assert ops == {"send_message", "notify_user", "create_thread"}
-        assert all(not op.read_only for op in desc.operations)
+        assert ops == _EXPECTED_MESSAGING_OPS
+        assert {op.operation for op in desc.operations if op.read_only} == {"list_channels"}
         assert desc.provider_id == "messaging.slack"
 
     def test_teams_descriptor(self, teams_provider: TeamsMessagingProvider) -> None:
         desc = teams_provider.get_descriptor()
         assert CapabilityType.MESSAGING in desc.capability_types
         ops = {op.operation for op in desc.operations}
-        assert ops == {"send_message", "notify_user", "create_thread"}
-        assert all(not op.read_only for op in desc.operations)
+        assert ops == _EXPECTED_MESSAGING_OPS
+        assert {op.operation for op in desc.operations if op.read_only} == {"list_channels"}
         assert desc.provider_id == "messaging.teams"
 
     def test_email_descriptor(self, email_provider: EmailMessagingProvider) -> None:
         desc = email_provider.get_descriptor()
         assert CapabilityType.MESSAGING in desc.capability_types
         ops = {op.operation for op in desc.operations}
-        assert ops == {"send_message", "notify_user", "create_thread"}
-        assert all(not op.read_only for op in desc.operations)
+        assert ops == _EXPECTED_MESSAGING_OPS
+        assert {op.operation for op in desc.operations if op.read_only} == {"list_channels"}
         assert desc.provider_id == "messaging.email"
 
-    def test_all_ops_read_only_false(self) -> None:
-        for op in _MESSAGING_OPS:
-            assert op.read_only is False
+    def test_only_read_ops_are_read_only(self) -> None:
+        # list_channels is the sole read op; everything else is a write.
+        read_only = {op.operation for op in _MESSAGING_OPS if op.read_only}
+        assert read_only == {"list_channels"}
 
 
 # ---------------------------------------------------------------------------

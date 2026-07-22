@@ -13,6 +13,7 @@ import logging
 from typing import Any, Protocol, runtime_checkable
 
 from agent_orchestrator.configuration.models import LLMConfig, SettingsConfig
+from agent_orchestrator.exceptions import ConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -71,15 +72,16 @@ class LLMAdapter:
         """
         provider = self._providers.get(llm_config.provider)
         if provider is None:
-            logger.warning(
-                "No provider registered for '%s', using mock response",
-                llm_config.provider,
+            # Refuse to fabricate a response. Previously this returned a fake
+            # "Mock response ... confidence 0.5" with success=True, so a
+            # deployment missing an API key would "succeed" on invented output
+            # and feed garbage downstream. Fail loudly instead.
+            raise ConfigurationError(
+                f"No LLM provider registered for '{llm_config.provider}'. "
+                f"Configure an API key for it (in settings, or via the "
+                f"AGENT_ORCH_{llm_config.provider.upper()}_API_KEY env var) — "
+                f"refusing to fabricate a response."
             )
-            return {
-                "response": f"Mock response (provider '{llm_config.provider}' not registered)",
-                "model": llm_config.model,
-                "confidence": 0.5,
-            }
 
         messages = [
             {"role": "system", "content": system_prompt},

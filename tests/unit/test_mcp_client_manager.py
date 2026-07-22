@@ -101,9 +101,10 @@ class TestMCPClientManagerConnect:
             command=None,
         )
         mgr = MCPClientManager(_make_config(no_cmd))
-        # Mock the SDK check to pass
+        # Mock the SDK check to pass. A missing 'command' is a configuration
+        # error (MCPConfigurationError), consistent with the other config tests.
         with patch("agent_orchestrator.mcp.client_manager._check_mcp_sdk"):
-            with pytest.raises(MCPConnectionError):
+            with pytest.raises(MCPConfigurationError):
                 await mgr.connect("bad")
 
     @pytest.mark.asyncio
@@ -116,7 +117,7 @@ class TestMCPClientManagerConnect:
         )
         mgr = MCPClientManager(_make_config(no_url))
         with patch("agent_orchestrator.mcp.client_manager._check_mcp_sdk"):
-            with pytest.raises(MCPConnectionError):
+            with pytest.raises(MCPConfigurationError):
                 await mgr.connect("bad")
 
 
