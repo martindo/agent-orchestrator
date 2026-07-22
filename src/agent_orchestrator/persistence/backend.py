@@ -83,3 +83,56 @@ def build_work_item_store(
     from agent_orchestrator.persistence.work_item_store import WorkItemStore
 
     return WorkItemStore(workspace_path=str(workspace_dir))
+
+
+def build_artifact_store(
+    settings: Any | None,
+    workspace_dir: Path | str,
+    file_base_dir: Path | str,
+) -> Any:
+    """Construct the artifact store for the configured persistence backend.
+
+    ``file_base_dir`` is where the file backend writes (the engine passes its
+    ``.state`` dir); the SQL backends ignore it and use the shared engine.
+    """
+    name = _backend_name(settings)
+
+    if name in _SQL_BACKENDS:
+        from agent_orchestrator.persistence.sql.artifact_store import SqlArtifactStore
+        from agent_orchestrator.persistence.sql.engine import get_engine
+
+        engine = get_engine(name, workspace_dir, settings)
+        if engine is not None:
+            logger.info("Artifact store: %s backend", name)
+            return SqlArtifactStore(engine)
+
+    from agent_orchestrator.persistence.artifact_store import ArtifactStore
+
+    return ArtifactStore(file_base_dir)
+
+
+def build_state_store(
+    settings: Any | None,
+    workspace_dir: Path | str,
+    state_dir: Path | str,
+) -> Any:
+    """Construct the namespaced runtime-state store for the configured backend.
+
+    ``state_dir`` is used by the file backend; the SQL backends use the engine.
+    """
+    name = _backend_name(settings)
+
+    if name in _SQL_BACKENDS:
+        from agent_orchestrator.persistence.sql.engine import get_engine
+        from agent_orchestrator.persistence.sql.state_store import SqlStateStore
+
+        engine = get_engine(name, workspace_dir, settings)
+        if engine is not None:
+            logger.info("State store: %s backend", name)
+            return SqlStateStore(engine)
+
+    from pathlib import Path as _Path
+
+    from agent_orchestrator.persistence.state_store import StateStore
+
+    return StateStore(_Path(state_dir))

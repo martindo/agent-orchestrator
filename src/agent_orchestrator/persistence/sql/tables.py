@@ -18,6 +18,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Index,
+    Integer,
     MetaData,
     String,
     Table,
@@ -40,4 +41,37 @@ work_items = Table(
     Index("ix_ao_work_items_type", "type_id"),
     Index("ix_ao_work_items_app", "app_id"),
     Index("ix_ao_work_items_run", "run_id"),
+)
+
+# ---- Artifacts --------------------------------------------------------------
+#
+# Content-addressable, append-per-store semantics (matching the file store's
+# JSONL index): each store() is one row. The autoincrement row_id preserves
+# insertion order for "latest entry" lookups and stable ordering on ties.
+
+artifacts = Table(
+    "ao_artifacts",
+    metadata,
+    Column("row_id", Integer, primary_key=True, autoincrement=True),
+    Column("artifact_id", String(64), nullable=False),
+    Column("work_id", String(128), nullable=False, index=True),
+    Column("phase_id", String(128), nullable=False, default=""),
+    Column("agent_id", String(128), nullable=False, default=""),
+    Column("artifact_type", String(64), nullable=False, index=True),
+    Column("content_hash", String(64), nullable=False, index=True),
+    Column("version", Integer, nullable=False, default=1),
+    Column("timestamp", DateTime(timezone=True), nullable=False, index=True),
+    Column("run_id", String(128), nullable=False, default=""),
+    Column("app_id", String(128), nullable=False, default=""),
+    Column("content", JSON, nullable=False),
+)
+
+# ---- Runtime state (namespaced key/value) -----------------------------------
+
+state = Table(
+    "ao_state",
+    metadata,
+    Column("namespace", String(256), primary_key=True),
+    Column("data", JSON, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
 )
