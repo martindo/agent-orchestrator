@@ -80,20 +80,35 @@ class AuditLogger:
         # Initialize from existing ledger
         self._load_state()
 
+    def _ledger_files(self) -> list[Path]:
+        """All ledger files in chain order: rotated (oldest→newest), then current.
+
+        Rotated files are named ``{stem}.{timestamp}.jsonl`` (the timestamp
+        format sorts chronologically); the active file is ``{stem}.jsonl``.
+        """
+        rotated = sorted(self._dir.glob(f"{self._ledger_path.stem}.*.jsonl"))
+        files = list(rotated)
+        if self._ledger_path.exists():
+            files.append(self._ledger_path)
+        return files
+
     def _load_state(self) -> None:
-        """Load sequence and last hash from existing ledger."""
-        if not self._ledger_path.exists():
-            return
-        try:
-            with open(self._ledger_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        record = json.loads(line)
-                        self._sequence = record.get("sequence", 0)
-                        self._last_hash = record.get("hash", "")
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Failed to load audit state: %s", e)
+        """Load sequence and last hash from the full ledger history.
+
+        Reads across rotated files too, so on restart after a rotation the
+        chain continues from the true last record (not a severed genesis).
+        """
+        for path in self._ledger_files():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            record = json.loads(line)
+                            self._sequence = record.get("sequence", self._sequence)
+                            self._last_hash = record.get("hash", self._last_hash)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("Failed to load audit state from %s: %s", path, e)
 
     def append(
         self,
@@ -141,18 +156,25 @@ class AuditLogger:
             self._write_record(record)
             return record
 
+    @staticmethod
+    def _digest_dict(record_dict: dict[str, Any]) -> str:
+        """SHA-256 over the full record content — every field except ``hash``.
+
+        Hashing the entire record (including the ``data`` payload, agent/app/run
+        ids, etc.) is what makes the trail tamper-evident: editing any field
+        changes the digest. Uses the full 256-bit digest (the old code hashed
+        only a handful of fields and truncated to 64 bits — data was unprotected
+        and collisions were cheap).
+        """
+        to_hash = {k: v for k, v in record_dict.items() if k != "hash"}
+        canonical = json.dumps(to_hash, sort_keys=True, default=str)
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
     def _compute_hash(self, record: AuditRecord) -> str:
-        """Compute SHA-256 hash for chain integrity."""
-        data_str = json.dumps({
-            "sequence": record.sequence,
-            "record_type": record.record_type.value,
-            "action": record.action,
-            "summary": record.summary,
-            "work_id": record.work_id,
-            "timestamp": record.timestamp,
-            "prev_hash": record.prev_hash,
-        }, sort_keys=True)
-        return hashlib.sha256(data_str.encode()).hexdigest()[:16]
+        """Compute the chain hash for a record (full content, full digest)."""
+        record_dict = asdict(record)
+        record_dict["record_type"] = record.record_type.value
+        return self._digest_dict(record_dict)
 
     def _write_record(self, record: AuditRecord) -> None:
         """Append a record to the JSONL file, rotating if needed."""
@@ -178,13 +200,23 @@ class AuditLogger:
             self._rotate_file()
 
     def _rotate_file(self) -> None:
-        """Rename the current ledger file with a timestamp suffix."""
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        """Rename the current ledger file with a unique timestamp suffix.
+
+        Microsecond precision keeps rotated names both unique (two rotations in
+        the same second no longer collide and silently skip) and
+        chronologically sortable (fixed-width numeric), which verify_chain and
+        _load_state rely on to walk segments in order.
+        """
+        now = datetime.now(timezone.utc)
+        timestamp = now.strftime("%Y%m%dT%H%M%S") + f"{now.microsecond:06d}"
         rotated_name = f"{self._ledger_path.stem}.{timestamp}.jsonl"
         rotated_path = self._dir / rotated_name
         try:
             self._ledger_path.rename(rotated_path)
-            self._last_hash = ""
+            # Do NOT reset _last_hash: the first record of the new file must
+            # chain to the last record of the rotated file, or rotation would
+            # silently sever the tamper-evidence (an attacker could drop a whole
+            # segment undetected). verify_chain walks all files in order.
             logger.info("Rotated audit log to %s", rotated_path)
         except OSError as e:
             logger.error("Failed to rotate audit log: %s", e, exc_info=True)
@@ -238,30 +270,43 @@ class AuditLogger:
     def verify_chain(self) -> bool:
         """Verify the integrity of the hash chain.
 
+        For every record (across all rotated files and the active one) this both
+        (a) recomputes the content hash and compares it to the stored ``hash`` —
+        detecting any edit to any field, including the ``data`` payload — and
+        (b) checks that ``prev_hash`` links to the previous record's hash —
+        detecting reordering, insertion, or deletion (including of whole rotated
+        segments). The old implementation only checked (b) and never recomputed,
+        so any content edit went undetected.
+
         Returns:
-            True if chain is intact.
+            True if the chain is intact and untampered.
         """
         with self._lock:
-            if not self._ledger_path.exists():
-                return True
-
             prev_hash = ""
-            try:
-                with open(self._ledger_path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        record = json.loads(line)
-                        if record.get("prev_hash", "") != prev_hash:
-                            logger.error(
-                                "Chain broken at sequence %d",
-                                record.get("sequence", 0),
-                            )
-                            return False
-                        prev_hash = record.get("hash", "")
-            except (json.JSONDecodeError, OSError) as e:
-                logger.error("Error verifying chain: %s", e)
-                return False
+            for path in self._ledger_files():
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            record = json.loads(line)
+                            expected = self._digest_dict(record)
+                            if expected != record.get("hash", ""):
+                                logger.error(
+                                    "Audit record %s content hash mismatch — tampered",
+                                    record.get("sequence", 0),
+                                )
+                                return False
+                            if record.get("prev_hash", "") != prev_hash:
+                                logger.error(
+                                    "Audit chain broken at sequence %s",
+                                    record.get("sequence", 0),
+                                )
+                                return False
+                            prev_hash = record.get("hash", "")
+                except (json.JSONDecodeError, OSError) as e:
+                    logger.error("Error verifying chain (%s): %s", path, e)
+                    return False
 
             return True
