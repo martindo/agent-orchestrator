@@ -31,6 +31,10 @@ services:
       - AGENT_ORCH_GOOGLE_API_KEY=${AGENT_ORCH_GOOGLE_API_KEY:-}
       - AGENT_ORCH_GROK_API_KEY=${AGENT_ORCH_GROK_API_KEY:-}
       - OLLAMA_ENDPOINT=http://ollama:11434
+      # Persistence tier for the containerized deployment. Defaults to the
+      # postgresql service below; override to file/sqlite if you don't want the DB.
+      - AGENT_ORCH_PERSISTENCE_BACKEND=${AGENT_ORCH_PERSISTENCE_BACKEND:-postgresql}
+      - AGENT_ORCH_DATABASE_URL=postgresql://${POSTGRES_USER:-orchestrator}:${POSTGRES_PASSWORD:-changeme}@db:5432/${POSTGRES_DB:-agent_orchestrator}
     depends_on:
       db:
         condition: service_healthy
