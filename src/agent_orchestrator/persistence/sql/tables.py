@@ -65,3 +65,13 @@ artifacts = Table(
     Column("app_id", String(128), nullable=False, default=""),
     Column("content", JSON, nullable=False),
 )
+
+# ---- Runtime state (namespaced key/value) -----------------------------------
+
+state = Table(
+    "ao_state",
+    metadata,
+    Column("namespace", String(256), primary_key=True),
+    Column("data", JSON, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)

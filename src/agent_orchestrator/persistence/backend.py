@@ -109,3 +109,30 @@ def build_artifact_store(
     from agent_orchestrator.persistence.artifact_store import ArtifactStore
 
     return ArtifactStore(file_base_dir)
+
+
+def build_state_store(
+    settings: Any | None,
+    workspace_dir: Path | str,
+    state_dir: Path | str,
+) -> Any:
+    """Construct the namespaced runtime-state store for the configured backend.
+
+    ``state_dir`` is used by the file backend; the SQL backends use the engine.
+    """
+    name = _backend_name(settings)
+
+    if name in _SQL_BACKENDS:
+        from agent_orchestrator.persistence.sql.engine import get_engine
+        from agent_orchestrator.persistence.sql.state_store import SqlStateStore
+
+        engine = get_engine(name, workspace_dir, settings)
+        if engine is not None:
+            logger.info("State store: %s backend", name)
+            return SqlStateStore(engine)
+
+    from pathlib import Path as _Path
+
+    from agent_orchestrator.persistence.state_store import StateStore
+
+    return StateStore(_Path(state_dir))

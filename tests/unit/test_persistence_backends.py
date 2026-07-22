@@ -26,10 +26,13 @@ from agent_orchestrator.persistence.artifact_store import ArtifactStore, create_
 from agent_orchestrator.persistence.backend import (
     WorkItemStoreProtocol,
     build_artifact_store,
+    build_state_store,
     build_work_item_store,
 )
 from agent_orchestrator.persistence.sql.artifact_store import SqlArtifactStore
-from agent_orchestrator.persistence.sql.tables import artifacts
+from agent_orchestrator.persistence.sql.state_store import SqlStateStore
+from agent_orchestrator.persistence.sql.tables import artifacts, state
+from agent_orchestrator.persistence.state_store import StateStore
 from agent_orchestrator.persistence.sql.engine import (
     dispose_all,
     get_engine,
@@ -232,6 +235,60 @@ def test_artifact_get_chain_chronological(sql_artifact_store):
     sql_artifact_store.store(create_artifact("w2", "p0", "a1", "output", {"step": 99}))
     chain = sql_artifact_store.get_chain("w1")
     assert [a.content["step"] for a in chain] == [0, 1, 2]
+
+
+def test_dispatch_sqlite_state_store(tmp_path):
+    store = build_state_store(_FakeSettings("sqlite"), tmp_path, tmp_path / ".state")
+    assert isinstance(store, SqlStateStore)
+    dispose_all()
+
+
+def test_dispatch_file_state_store(tmp_path):
+    store = build_state_store(_FakeSettings("file"), tmp_path, tmp_path / ".state")
+    assert isinstance(store, StateStore)
+
+
+@pytest.fixture(params=SQL_BACKENDS)
+def sql_state_store(request, tmp_path):
+    engine = get_engine(request.param, tmp_path)
+    with engine.begin() as conn:
+        conn.execute(state.delete())
+    yield SqlStateStore(engine)
+    with engine.begin() as conn:
+        conn.execute(state.delete())
+    dispose_all()
+
+
+def test_state_save_load_roundtrip(sql_state_store):
+    sql_state_store.save("queue", {"items": [1, 2, 3], "size": 3})
+    assert sql_state_store.load("queue") == {"items": [1, 2, 3], "size": 3}
+
+
+def test_state_load_missing_is_none(sql_state_store):
+    assert sql_state_store.load("nope") is None
+
+
+def test_state_save_is_upsert(sql_state_store):
+    sql_state_store.save("agents", {"v": 1})
+    sql_state_store.save("agents", {"v": 2})
+    assert sql_state_store.load("agents") == {"v": 2}
+    assert sql_state_store.list_namespaces() == ["agents"]
+
+
+def test_state_delete_and_list(sql_state_store):
+    sql_state_store.save("a", {"x": 1})
+    sql_state_store.save("b", {"y": 2})
+    assert set(sql_state_store.list_namespaces()) == {"a", "b"}
+    assert sql_state_store.delete("a") is True
+    assert sql_state_store.delete("a") is False
+    assert sql_state_store.list_namespaces() == ["b"]
+
+
+def test_state_clear(sql_state_store):
+    sql_state_store.save("a", {"x": 1})
+    sql_state_store.save("b", {"y": 2})
+    sql_state_store.clear()
+    assert sql_state_store.list_namespaces() == []
 
 
 def test_history_survives_roundtrip(sql_store):
