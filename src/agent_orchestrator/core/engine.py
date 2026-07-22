@@ -286,10 +286,13 @@ class OrchestrationEngine:
         state_dir = self._config.workspace_dir / ".state"
         state_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize artifact store
+        # Initialize artifact store — dispatched by persistence_backend
+        # (file / sqlite / postgresql); file writes under state_dir.
         try:
-            from agent_orchestrator.persistence.artifact_store import ArtifactStore
-            self._artifact_store = ArtifactStore(state_dir)
+            from agent_orchestrator.persistence.backend import build_artifact_store
+            self._artifact_store = build_artifact_store(
+                self._config.get_settings(), self._config.workspace_dir, state_dir,
+            )
         except Exception:
             logger.error("Artifact store initialization failed — continuing without it", exc_info=True)
             self._artifact_store = None

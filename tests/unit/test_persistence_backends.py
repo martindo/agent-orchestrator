@@ -22,10 +22,14 @@ from agent_orchestrator.core.work_queue import (
     WorkItemStatus,
 )
 from agent_orchestrator.exceptions import ConfigurationError
+from agent_orchestrator.persistence.artifact_store import ArtifactStore, create_artifact
 from agent_orchestrator.persistence.backend import (
     WorkItemStoreProtocol,
+    build_artifact_store,
     build_work_item_store,
 )
+from agent_orchestrator.persistence.sql.artifact_store import SqlArtifactStore
+from agent_orchestrator.persistence.sql.tables import artifacts
 from agent_orchestrator.persistence.sql.engine import (
     dispose_all,
     get_engine,
@@ -168,6 +172,66 @@ def test_summary_counts(sql_store):
     assert summary["total"] == 3
     assert summary["by_status"]["pending"] == 2
     assert summary["by_type"]["task"] == 2
+
+
+def test_dispatch_sqlite_artifact_store(tmp_path):
+    store = build_artifact_store(_FakeSettings("sqlite"), tmp_path, tmp_path / ".state")
+    assert isinstance(store, SqlArtifactStore)
+    dispose_all()
+
+
+def test_dispatch_file_artifact_store(tmp_path):
+    store = build_artifact_store(_FakeSettings("file"), tmp_path, tmp_path / ".state")
+    assert isinstance(store, ArtifactStore)
+
+
+@pytest.fixture(params=SQL_BACKENDS)
+def sql_artifact_store(request, tmp_path):
+    engine = get_engine(request.param, tmp_path)
+    with engine.begin() as conn:
+        conn.execute(artifacts.delete())
+    yield SqlArtifactStore(engine)
+    with engine.begin() as conn:
+        conn.execute(artifacts.delete())
+    dispose_all()
+
+
+def test_artifact_store_and_get_by_hash(sql_artifact_store):
+    art = create_artifact(
+        work_id="w1", phase_id="p1", agent_id="a1",
+        artifact_type="output", content={"result": "hello"},
+    )
+    content_hash = sql_artifact_store.store(art)
+    fetched = sql_artifact_store.get_by_hash(content_hash)
+    assert fetched is not None
+    assert fetched.work_id == "w1"
+    assert fetched.artifact_type == "output"
+    assert fetched.content == {"result": "hello"}
+
+
+def test_artifact_get_by_hash_missing(sql_artifact_store):
+    assert sql_artifact_store.get_by_hash("deadbeef") is None
+
+
+def test_artifact_query_filters_and_count(sql_artifact_store):
+    sql_artifact_store.store(create_artifact("w1", "p1", "a1", "input", {"n": 1}))
+    sql_artifact_store.store(create_artifact("w1", "p2", "a1", "output", {"n": 2}))
+    sql_artifact_store.store(create_artifact("w2", "p1", "a2", "output", {"n": 3}))
+
+    assert sql_artifact_store.count() == 3
+    assert {a.content["n"] for a in sql_artifact_store.query(work_id="w1")} == {1, 2}
+    assert {a.content["n"] for a in sql_artifact_store.query(artifact_type="output")} == {2, 3}
+    assert {a.content["n"] for a in sql_artifact_store.query(agent_id="a2")} == {3}
+
+
+def test_artifact_get_chain_chronological(sql_artifact_store):
+    for i in range(3):
+        sql_artifact_store.store(
+            create_artifact("w1", f"p{i}", "a1", "output", {"step": i})
+        )
+    sql_artifact_store.store(create_artifact("w2", "p0", "a1", "output", {"step": 99}))
+    chain = sql_artifact_store.get_chain("w1")
+    assert [a.content["step"] for a in chain] == [0, 1, 2]
 
 
 def test_history_survives_roundtrip(sql_store):
