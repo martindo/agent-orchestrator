@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api-tests:
+    name: API test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install (with llm + mcp extras)
+        # The llm and mcp extras are REQUIRED — without them tests/conftest.py
+        # cannot even be collected (the lazy provider imports raise
+        # "cannot import name 'AnthropicProvider'").
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,llm,mcp]"
+
+      - name: Run pytest
+        run: pytest tests -q
+
+  studio-tests:
+    name: Studio test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: studio/pyproject.toml
+
+      - name: Install studio
+        working-directory: studio
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run pytest
+        working-directory: studio
+        run: pytest tests -q
+
+  studio-frontend:
+    name: Studio frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: studio/frontend/package-lock.json
+
+      - name: Install and build
+        working-directory: studio/frontend
+        # `npm ci` reinstalls cleanly from the lockfile, which is why this
+        # passes in CI even though the committed node_modules is stale/broken
+        # (tracked as AUDIT-TASKS.md 5.2 — untrack node_modules).
+        run: |
+          npm ci
+          npm run build
