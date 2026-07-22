@@ -722,6 +722,19 @@ class TestEngineMetrics:
 
         await engine.start()
         try:
+            # Register a fake LLM provider so work actually processes. The
+            # engine no longer fabricates a mock response for unconfigured
+            # providers (it raises), so a test that wants a *successful* run
+            # must supply a provider rather than rely on the old silent mock.
+            from unittest.mock import AsyncMock
+
+            fake_provider = AsyncMock()
+            fake_provider.complete = AsyncMock(
+                return_value={"response": "ok", "confidence": 0.9, "model": "fake"},
+            )
+            for provider_name in {"openai", "anthropic", "ollama"}:
+                engine._llm_adapter.register_provider(provider_name, fake_provider)
+
             item = WorkItem(id="w1", type_id="task", title="Test")
             await engine.submit_work(item)
             await asyncio.sleep(0.5)

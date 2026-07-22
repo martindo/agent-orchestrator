@@ -68,10 +68,15 @@ class TestMCPSessionRegistry:
             reg.create_session("s3")
 
     def test_expired_session_evicted(self) -> None:
-        reg = MCPSessionRegistry(ttl_seconds=0)  # immediate expiry
-        reg.create_session("s1")
         import time
-        time.sleep(0.01)
+
+        reg = MCPSessionRegistry(ttl_seconds=1)
+        session = reg.create_session("s1")
+        # Backdate activity well beyond the TTL so eviction is deterministic.
+        # (The old test used ttl=0 + sleep(0.01), but is_expired uses a strict
+        # `elapsed > ttl`, so on a coarse monotonic clock elapsed could be 0.0
+        # and the session would not be evicted — intermittent failures.)
+        session.last_activity = time.monotonic() - 10
         assert reg.get_session("s1") is None
 
     def test_active_count(self) -> None:

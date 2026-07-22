@@ -98,12 +98,22 @@ class TestConstructorValidation:
 # ---------------------------------------------------------------------------
 
 
+_EXPECTED_TICKETING_OPS = {
+    "create_ticket",
+    "update_ticket",
+    "transition_ticket",
+    "get_ticket",
+    "search_tickets",
+    "get_sprint_issues",
+}
+
+
 class TestDescriptorShape:
     def test_jira_descriptor(self, jira_provider: JiraTicketingProvider) -> None:
         desc = jira_provider.get_descriptor()
         assert CapabilityType.TICKETING in desc.capability_types
         ops = {op.operation for op in desc.operations}
-        assert ops == {"create_ticket", "update_ticket", "get_ticket", "search_tickets"}
+        assert ops == _EXPECTED_TICKETING_OPS
         assert desc.provider_id == "ticketing.jira"
         assert desc.auth_required is True
 
@@ -111,7 +121,7 @@ class TestDescriptorShape:
         desc = linear_provider.get_descriptor()
         assert CapabilityType.TICKETING in desc.capability_types
         ops = {op.operation for op in desc.operations}
-        assert ops == {"create_ticket", "update_ticket", "get_ticket", "search_tickets"}
+        assert ops == _EXPECTED_TICKETING_OPS
         assert desc.provider_id == "ticketing.linear"
 
     def test_write_ops_are_not_read_only(self) -> None:

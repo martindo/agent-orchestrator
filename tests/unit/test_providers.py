@@ -6,12 +6,14 @@ All tests use mocked SDK clients — no real API calls are made.
 from __future__ import annotations
 
 import asyncio
+import importlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from agent_orchestrator.adapters.llm_adapter import LLMAdapter
 from agent_orchestrator.configuration.models import LLMConfig, SettingsConfig
+from agent_orchestrator.exceptions import ConfigurationError
 
 
 # ---------------------------------------------------------------------------
@@ -378,18 +380,20 @@ class TestProviderRegistration:
 
         from agent_orchestrator.core.engine import OrchestrationEngine
 
-        # Make both key-based and ollama imports fail
-        def _fail_import(mod_path):
-            raise ImportError("no sdk")
+        # Fail only the openai provider's SDK import; delegate everything else
+        # to the real importer. (Patching importlib.import_module globally with
+        # an unconditional raise breaks unittest.mock's own target resolution.)
+        real_import = importlib.import_module
 
-        with patch("importlib.import_module", side_effect=_fail_import):
-            with patch(
-                "agent_orchestrator.adapters.providers.ollama_provider",
-                side_effect=ImportError("no sdk"),
-            ):
-                OrchestrationEngine._register_providers(adapter, settings)
+        def _fail_openai(mod_path, *args, **kwargs):
+            if "openai_provider" in mod_path:
+                raise ImportError("no sdk")
+            return real_import(mod_path, *args, **kwargs)
 
-        # Provider should NOT be registered if import failed
+        with patch("importlib.import_module", side_effect=_fail_openai):
+            OrchestrationEngine._register_providers(adapter, settings)
+
+        # Provider should NOT be registered if its SDK import failed
         assert "openai" not in adapter._providers
 
 
@@ -417,15 +421,16 @@ class TestLLMAdapterRouting:
         assert result["response"] == "routed!"
         mock_provider.complete.assert_awaited_once()
 
-    async def test_returns_mock_for_unregistered_provider(self):
+    async def test_raises_for_unregistered_provider(self):
         settings = SettingsConfig(active_profile="test")
         adapter = LLMAdapter(settings)
 
         config = LLMConfig(provider="nonexistent", model="x")
-        result = await adapter.call("system", "user", config)
-
-        assert "Mock response" in result["response"]
-        assert result["confidence"] == 0.5
+        # An unregistered provider (e.g. missing API key) must fail loudly,
+        # not fabricate a "Mock response" with confidence 0.5 — a fabricated
+        # success would feed invented output downstream.
+        with pytest.raises(ConfigurationError):
+            await adapter.call("system", "user", config)
 
     async def test_passes_messages_correctly(self):
         settings = SettingsConfig(active_profile="test")
