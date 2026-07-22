@@ -308,9 +308,12 @@ class OrchestrationEngine:
         self._audit_logger = AuditLogger(state_dir / "audit")
         self._metrics = MetricsCollector(state_dir / "metrics.jsonl")
 
-        # Work item persistence
-        workspace_str = str(self._config.workspace_dir)
-        self._work_item_store = WorkItemStore(workspace_path=workspace_str)
+        # Work item persistence — dispatched by the persistence_backend setting
+        # (file / sqlite / postgresql). File is the default.
+        from agent_orchestrator.persistence.backend import build_work_item_store
+        self._work_item_store = build_work_item_store(
+            self._config.get_settings(), self._config.workspace_dir,
+        )
 
         # Connector service — wires registry to audit logger and metrics
         from ..connectors.service import ConnectorService
