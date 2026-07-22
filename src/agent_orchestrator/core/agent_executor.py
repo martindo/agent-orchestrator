@@ -3,7 +3,7 @@
 Responsibilities:
 - Build system prompt from agent definition
 - Build user prompt from work item context + phase context
-- Call LLM (placeholder — real LLM calls via adapters in Phase 5)
+- Call LLM via an injected llm_call_fn (the engine wires a real LLMAdapter)
 - Validate output
 - Handle retries based on agent's retry_policy
 - Record execution metrics
@@ -240,9 +240,12 @@ async def _default_llm_call(
     user_prompt: str,
     llm_config: Any,
 ) -> dict[str, Any]:
-    """Default LLM call stub — returns mock response.
+    """Default LLM call stub — returns a canned mock response.
 
-    This is replaced by real LLM adapters in Phase 5.
+    TEST-ONLY FALLBACK. In production the engine injects a real LLMAdapter
+    (see OrchestrationEngine._initialize_components), so this is only reached
+    when an AgentExecutor is constructed with no llm_call_fn — i.e. in unit
+    tests. Do not rely on this path at runtime.
     """
     logger.debug("Default LLM call (stub) — returning mock response")
     return {

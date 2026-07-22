@@ -279,12 +279,19 @@ class OrchestrationEngine:
             self._llm_adapter = None
             self._agent_executor = AgentExecutor(llm_call_fn=self._llm_call_fn)
 
+        # State directory — must exist before any store that writes into it.
+        # (Previously this was defined AFTER the artifact-store init below, so
+        # ArtifactStore(state_dir) raised UnboundLocalError on every start and
+        # was silently swallowed — artifact persistence never ran.)
+        state_dir = self._config.workspace_dir / ".state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+
         # Initialize artifact store
         try:
             from agent_orchestrator.persistence.artifact_store import ArtifactStore
             self._artifact_store = ArtifactStore(state_dir)
         except Exception:
-            logger.debug("Artifact store initialization failed — continuing without it", exc_info=True)
+            logger.error("Artifact store initialization failed — continuing without it", exc_info=True)
             self._artifact_store = None
 
         self._phase_executor = PhaseExecutor(
@@ -298,8 +305,6 @@ class OrchestrationEngine:
         # Governance and observability
         self._governor = Governor(profile.governance)
         self._review_queue = ReviewQueue()
-        state_dir = self._config.workspace_dir / ".state"
-        state_dir.mkdir(parents=True, exist_ok=True)
         self._audit_logger = AuditLogger(state_dir / "audit")
         self._metrics = MetricsCollector(state_dir / "metrics.jsonl")
 
