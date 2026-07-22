@@ -22,6 +22,7 @@ from typing import Any
 
 from agent_orchestrator.configuration.models import AgentDefinition, RetryPolicy
 from agent_orchestrator.core.agent_pool import AgentInstance
+from agent_orchestrator.core.output_parser import parse_confidence
 from agent_orchestrator.core.work_queue import WorkItem
 from agent_orchestrator.exceptions import AgentError
 
@@ -150,6 +151,8 @@ class AgentExecutor:
 
         duration = time.monotonic() - start_time
 
+        response = _attach_confidence(response)
+
         return ExecutionResult(
             agent_id=definition.id,
             instance_id=instance.instance_id,
@@ -195,7 +198,38 @@ def _build_user_prompt(
         parts.append(f"\n## Phase Context\n{_format_dict(phase_context)}")
     if work_item.results:
         parts.append(f"\n## Previous Results\n{_format_dict(work_item.results)}")
+    parts.append(_CONFIDENCE_INSTRUCTION)
     return "\n".join(parts)
+
+
+# Asks the agent to self-report confidence so governance has a real signal to
+# gate on (see output_parser.parse_confidence + core/quality_gate). Without this
+# the confidence was always the 0.5 default and ABORT/QUEUE could never fire.
+_CONFIDENCE_INSTRUCTION = (
+    "\n## Response requirement\n"
+    "On the FINAL line of your response, report your confidence in this output "
+    "as a single number between 0 and 1, formatted exactly as:\n"
+    "CONFIDENCE: <value>\n"
+    "Use a low value when you are unsure or lack information, a high value when "
+    "you are confident."
+)
+
+
+def _attach_confidence(response: dict[str, Any]) -> dict[str, Any]:
+    """Populate ``response['confidence']`` from the agent's self-report.
+
+    Real providers return prose in ``response['response']`` with no structured
+    confidence, so we parse the ``CONFIDENCE: <value>`` marker the prompt asks
+    for. Leaves an existing explicit ``confidence`` untouched (e.g. the test
+    stub), and adds nothing when none is reported (governance then treats it as
+    the neutral default rather than a fabricated score).
+    """
+    if not isinstance(response, dict) or "confidence" in response:
+        return response
+    parsed = parse_confidence(str(response.get("response", "")))
+    if parsed is None:
+        return response
+    return {**response, "confidence": parsed}
 
 
 def _format_dict(d: dict[str, Any]) -> str:

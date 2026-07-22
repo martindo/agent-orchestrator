@@ -10,6 +10,37 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CONFIDENCE = 0.5
 _CONFIDENCE_KEYS = ("confidence", "score", "quality_score")
+
+# Matches a self-reported confidence in an agent's free-text answer:
+# "CONFIDENCE: 0.85", `"confidence": 0.9`, "confidence is 0.7", etc. The number
+# must be 0..1; a small non-digit gap keeps it from crossing into unrelated text
+# or other lines. Callers take the LAST match (agents tend to restate).
+_CONFIDENCE_TEXT_PATTERN = re.compile(
+    r"confidence[^\d\n]{0,15}?([01](?:\.\d+)?|0?\.\d+)",
+    re.IGNORECASE,
+)
+
+
+def parse_confidence(text: str) -> float | None:
+    """Parse a self-reported confidence value from an agent's free-text output.
+
+    Real LLM providers return prose in ``output["response"]`` with no structured
+    ``confidence`` field, which is why confidence-based governance was inert
+    (always the 0.5 default). Agents are now asked to end with a
+    ``CONFIDENCE: <0..1>`` marker; this extracts it.
+
+    Returns the clamped value, or ``None`` when no confidence is present — so the
+    caller can fall back rather than fabricate a number.
+    """
+    if not text:
+        return None
+    matches = _CONFIDENCE_TEXT_PATTERN.findall(text)
+    if not matches:
+        return None
+    try:
+        return max(0.0, min(1.0, float(matches[-1])))
+    except (TypeError, ValueError):
+        return None
 _SCORE_KEYS = frozenset({
     "confidence", "accuracy", "completeness", "quality_score",
     "risk_score", "relevance", "coherence",
