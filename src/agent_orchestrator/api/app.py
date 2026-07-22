@@ -56,6 +56,7 @@ def create_app(
     workspace_dir: Path | None = None,
     agent_manager: object | None = None,
     engine: object | None = None,
+    auth_enabled: bool | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -65,6 +66,9 @@ def create_app(
             If not provided and workspace_dir is set, one will be created.
         engine: Optional OrchestrationEngine instance. If provided,
             the engine's agent_manager takes precedence.
+        auth_enabled: Explicit auth-enforcement override. When None, resolved
+            from AGENT_ORCH_AUTH_ENABLED, then the deployment mode (enterprise
+            → on, otherwise off). See middleware.api_auth.
 
     Returns:
         Configured FastAPI application.
@@ -97,6 +101,9 @@ def create_app(
     else:
         app.state.agent_manager = None
         app.state.config_manager = None
+
+    # Configurable authentication enforcement (opt-in, secure default per mode)
+    _configure_auth(app, auth_enabled)
 
     # Register route groups
     app.include_router(health_router, prefix=API_PREFIX, tags=["health"])
@@ -148,6 +155,40 @@ def create_app(
 
     logger.info("API application created")
     return app
+
+
+def _resolve_deployment_mode(app: FastAPI) -> str:
+    """Best-effort deployment mode from settings, falling back to env/lite."""
+    config_manager = getattr(app.state, "config_manager", None)
+    if config_manager is not None:
+        try:
+            settings = config_manager.get_settings()
+            mode = getattr(settings, "deployment_mode", None)
+            if mode:
+                return str(getattr(mode, "value", mode))
+        except Exception:
+            logger.debug("Could not read deployment_mode from settings", exc_info=True)
+    import os
+
+    return os.environ.get("AGENT_ORCH_DEPLOYMENT_MODE", "lite")
+
+
+def _configure_auth(app: FastAPI, auth_enabled: bool | None) -> None:
+    """Resolve and attach the auth-enforcement middleware."""
+    from agent_orchestrator.middleware.api_auth import (
+        AuthMiddleware,
+        resolve_auth_settings,
+    )
+
+    settings = resolve_auth_settings(
+        _resolve_deployment_mode(app), enabled=auth_enabled,
+    )
+    app.state.auth_settings = settings
+    app.add_middleware(AuthMiddleware, settings=settings)
+    if settings.enabled:
+        logger.info("API authentication enforcement: ENABLED (mode=%s)", settings.deployment_mode)
+    else:
+        logger.info("API authentication enforcement: disabled (mode=%s)", settings.deployment_mode)
 
 
 def _try_mount_mcp(app: FastAPI, engine: object | None) -> None:
