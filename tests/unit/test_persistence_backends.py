@@ -72,6 +72,34 @@ def test_file_backend_has_no_url(tmp_path):
     assert resolve_database_url("file", tmp_path) is None
 
 
+# ---- Generated schema (single source of truth = metadata) -------------------
+
+
+def test_render_schema_covers_all_tables():
+    from agent_orchestrator.persistence.sql.schema import render_create_sql
+
+    ddl = render_create_sql("postgresql")
+    for table in ("ao_work_items", "ao_artifacts", "ao_state"):
+        assert f"CREATE TABLE {table}" in ddl
+
+
+def test_committed_schema_matches_metadata():
+    """db/schema.sql must stay in sync with the SQLAlchemy metadata.
+
+    Regenerate with:
+        python -m agent_orchestrator.persistence.sql.schema postgresql > db/schema.sql
+    """
+    from pathlib import Path
+
+    from agent_orchestrator.persistence.sql.schema import render_create_sql
+
+    repo_root = Path(__file__).resolve().parents[2]
+    committed = (repo_root / "db" / "schema.sql").read_text(encoding="utf-8")
+    expected = render_create_sql("postgresql")
+    # Normalize line endings so a CRLF checkout on Windows doesn't false-fail.
+    assert committed.replace("\r\n", "\n") == expected.replace("\r\n", "\n")
+
+
 def test_sqlite_url_defaults_under_workspace(tmp_path):
     url = resolve_database_url("sqlite", tmp_path)
     assert url.startswith("sqlite:///")

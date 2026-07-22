@@ -69,7 +69,8 @@ services:
       - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./db/init:/docker-entrypoint-initdb.d:ro
+      # No init-SQL mount: the app creates its schema on startup via
+      # metadata.create_all (see db/schema.sql / db/README.md).
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orchestrator} -d ${POSTGRES_DB:-agent_orchestrator}"]
       interval: 5s
