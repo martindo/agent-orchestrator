@@ -274,7 +274,7 @@ Last updated: 2026-07-22
   - governance/review_queue.py — JSONL persistence for review items (no more in-memory-only loss)
   - governance/governor.py — Safe policy evaluation (no eval/exec of arbitrary expressions)
   - governance/audit_logger.py — Log rotation support; audit file size management
-  - adapters/webhook_adapter.py — Webhook delivery (httpx-based POST). NOTE: retry/backoff is not yet implemented (single POST) — tracked in docs/AUDIT-TASKS.md §4.3.
+  - adapters/webhook_adapter.py — Webhook delivery (httpx-based POST) with exponential-backoff retry on transient failures (5xx/429/network), correct failure reporting, and optional HMAC-SHA256 body signing.
   - core/phase_executor.py — Phase timeout enforcement via asyncio.wait_for
   - core/agent_executor.py — Multi-dimensional scoring (beyond single confidence float)
   - governance/review_queue.py — Review SLA tracking (deadline, escalation)
