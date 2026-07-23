@@ -375,7 +375,7 @@ class OrchestrationEngine:
             self._rubric_store = RubricStore(state_dir / "rubrics")
             logger.info("Rubric store initialized at %s", state_dir / "rubrics")
         except Exception:
-            logger.debug(
+            logger.error(
                 "Rubric store initialization failed — continuing without it",
                 exc_info=True,
             )
@@ -386,7 +386,7 @@ class OrchestrationEngine:
             self._dataset_store = DatasetStore(state_dir / "datasets")
             logger.info("Dataset store initialized at %s", state_dir / "datasets")
         except Exception:
-            logger.debug(
+            logger.error(
                 "Dataset store initialization failed — continuing without it",
                 exc_info=True,
             )
@@ -1258,12 +1258,59 @@ class OrchestrationEngine:
             if registered > 0:
                 logger.info("Auto-registered %d skills from profile", registered)
             logger.info("Skill map initialized at %s", state_dir / "skills")
+            # Feed the skill map from real agent runs (it was only ever updated
+            # via the API, never by the engine — audit 3.7).
+            self._event_bus.subscribe(
+                EventType.AGENT_COMPLETED, self._record_skill_executions,
+            )
+            self._event_bus.subscribe(
+                EventType.AGENT_ERROR, self._record_skill_executions,
+            )
         except Exception:
-            logger.debug(
+            logger.error(
                 "Skill map initialization failed — continuing without it",
                 exc_info=True,
             )
             self._skill_map = None
+
+    async def _record_skill_executions(self, event: Event) -> None:
+        """Record an agent execution against each of its skills (audit 3.7).
+
+        The skill map used to learn only from the API, never from real runs.
+        Reads the enriched AGENT_COMPLETED/AGENT_ERROR event and emits
+        SKILL_UPDATED when any skill metric changes.
+        """
+        if self._skill_map is None:
+            return
+        data = event.data
+        agent_id = data.get("agent_id", "")
+        skills = data.get("skills") or []
+        if not agent_id or not skills:
+            return
+        success = bool(data.get("success", False))
+        confidence = float(data.get("confidence", 0.0) or 0.0)
+        duration = float(data.get("duration", 0.0) or 0.0)
+
+        updated: list[str] = []
+        for skill_id in skills:
+            try:
+                if self._skill_map.record_execution(
+                    skill_id, agent_id,
+                    success=success, confidence=confidence, duration_seconds=duration,
+                ):
+                    updated.append(skill_id)
+            except Exception:
+                logger.warning(
+                    "Failed to record skill execution (skill=%s agent=%s)",
+                    skill_id, agent_id, exc_info=True,
+                )
+
+        if updated:
+            await self._event_bus.emit(Event(
+                type=EventType.SKILL_UPDATED,
+                data={"agent_id": agent_id, "skills": updated},
+                source="engine",
+            ))
 
     def _auto_register_capability(
         self, profile: ProfileConfig, settings: SettingsConfig,
@@ -1473,7 +1520,7 @@ class OrchestrationEngine:
             )
             logger.info("Knowledge store initialized at %s", state_dir)
         except Exception:
-            logger.debug("Knowledge store initialization failed — continuing without it", exc_info=True)
+            logger.error("Knowledge store initialization failed — continuing without it", exc_info=True)
             self._knowledge_store = None
 
     def _build_knowledge_context(
@@ -1955,5 +2002,5 @@ class OrchestrationEngine:
             )
             await self._sla_monitor.start()
         except Exception:
-            logger.debug("SLA monitor initialization failed", exc_info=True)
+            logger.error("SLA monitor initialization failed", exc_info=True)
             self._sla_monitor = None
