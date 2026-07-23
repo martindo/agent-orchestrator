@@ -323,12 +323,21 @@ class OrchestrationEngine:
             self._config.get_settings(), self._config.workspace_dir,
         )
 
-        # Connector service — wires registry to audit logger and metrics
+        # Connector service — wires registry to audit logger and metrics.
+        # Inject a contract validator so the contracts framework actually runs
+        # on the execute path (it was built with no validator, so
+        # _validate_input/output_contract always early-returned). It no-ops
+        # until contracts are registered in `contract_registry`.
         from ..connectors.service import ConnectorService
+        from ..contracts import ContractRegistry, ContractValidator
+        self._contract_registry = ContractRegistry()
         self._connector_service = ConnectorService(
             registry=self._connector_registry,
             audit_logger=self._audit_logger,
             metrics=self._metrics,
+            contract_validator=ContractValidator(
+                self._contract_registry, audit_logger=self._audit_logger,
+            ),
         )
         logger.info("Connector service initialized")
 
@@ -1153,6 +1162,15 @@ class OrchestrationEngine:
     def work_item_store(self) -> WorkItemStore | None:
         """The engine's work item persistence store (available after start)."""
         return self._work_item_store
+
+    @property
+    def contract_registry(self) -> Any | None:
+        """The contract registry backing connector-contract validation.
+
+        Register `CapabilityContract`s here to have the connector execute path
+        validate against them (available after start).
+        """
+        return getattr(self, "_contract_registry", None)
 
     @property
     def artifact_store(self) -> Any | None:
