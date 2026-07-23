@@ -1418,12 +1418,48 @@ class OrchestrationEngine:
                 run_id=run_id,
             ))
 
+    def _build_embedding_service(self) -> Any | None:
+        """Construct an EmbeddingService if an embedding API key is configured.
+
+        Returns None when no key is available — semantic search then stays
+        disabled and retrieval uses keyword/tag overlap (honest fallback). The
+        key/model/endpoint can be overridden via AGENT_ORCH_EMBEDDING_* env vars;
+        otherwise the OpenAI key from settings is used.
+        """
+        api_key = (
+            os.environ.get("AGENT_ORCH_EMBEDDING_API_KEY")
+            or self._config.get_settings().api_keys.get("openai", "")
+        )
+        if not api_key:
+            logger.info(
+                "No embedding API key configured — semantic search disabled "
+                "(retrieval uses keyword/tag overlap)",
+            )
+            return None
+        try:
+            from agent_orchestrator.knowledge.embedding import EmbeddingService
+            return EmbeddingService(
+                api_key=api_key,
+                model=os.environ.get("AGENT_ORCH_EMBEDDING_MODEL", "text-embedding-3-small"),
+                base_url=os.environ.get(
+                    "AGENT_ORCH_EMBEDDING_BASE_URL", "https://api.openai.com/v1",
+                ),
+            )
+        except Exception:
+            logger.error("Failed to build embedding service — semantic search disabled", exc_info=True)
+            return None
+
     def _initialize_knowledge_store(self, state_dir: Path) -> None:
         """Initialize the knowledge store and subscribe extraction handlers."""
         try:
             from agent_orchestrator.knowledge.store import KnowledgeStore
             from agent_orchestrator.knowledge.context_memory import ContextMemory
-            self._knowledge_store = KnowledgeStore(state_dir)
+            # Wire a real embedding service when a key is configured so semantic
+            # search actually works (it was never instantiated, so
+            # semantic_query always raised and retrieval fell back to keyword).
+            self._knowledge_store = KnowledgeStore(
+                state_dir, embedding_service=self._build_embedding_service(),
+            )
             self._context_memory = ContextMemory(self._knowledge_store)
 
             # Subscribe auto-extraction handlers
