@@ -15,6 +15,7 @@ API key. No hardcoded model lists.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -117,7 +118,16 @@ def _load_from_disk(request: Request) -> None:
         if not isinstance(data, dict):
             return
         store = request.app.state.llm_settings
-        store["api_keys"] = data.get("api_keys", {})
+        api_keys = data.get("api_keys", {}) or {}
+        # Fill any blank key from its env var (env-sourced keys are not written
+        # to disk on save — see _save_to_disk). Matches the runtime settings store.
+        for provider in PROVIDERS:
+            env_var = provider.get("env_var")
+            if env_var and not api_keys.get(provider["id"]):
+                env_val = os.environ.get(env_var)
+                if env_val:
+                    api_keys[provider["id"]] = env_val
+        store["api_keys"] = api_keys
         store["endpoints"] = data.get("endpoints", {})
         logger.info("Loaded LLM settings from %s", path)
     except Exception as exc:
@@ -130,8 +140,17 @@ def _save_to_disk(request: Request) -> None:
     path = _settings_path(request)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        # Don't persist API keys that come from env vars — avoids writing
+        # env-sourced secrets to the plaintext YAML (aligns with the runtime
+        # settings store). They are re-applied from env on load.
+        api_keys = dict(store["api_keys"])
+        for provider in PROVIDERS:
+            env_var = provider.get("env_var")
+            pid = provider["id"]
+            if env_var and api_keys.get(pid) and os.environ.get(env_var) == api_keys[pid]:
+                api_keys[pid] = ""
         data = {
-            "api_keys": store["api_keys"],
+            "api_keys": api_keys,
             "endpoints": store["endpoints"],
         }
         path.write_text(
