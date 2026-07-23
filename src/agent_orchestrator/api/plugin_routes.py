@@ -3,10 +3,21 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
+from pydantic import BaseModel, Field
 
 from ..plugins.sdk import PluginMetadata, plugin_registry
 
 router = APIRouter(prefix="/plugins", tags=["plugins"])
+
+
+class RegisterPluginRequest(BaseModel):
+    id: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1)
+    version: str = "1.0.0"
+    author: str = ""
+    description: str = ""
+    plugin_type: str = "connector"
+    entry_point: str = ""
 
 
 @router.get("/")
@@ -20,16 +31,16 @@ async def list_plugins(plugin_type: str = "") -> dict:
 
 
 @router.post("/register")
-async def register_plugin(body: dict) -> dict:
+async def register_plugin(body: RegisterPluginRequest) -> dict:
     """Register a new plugin."""
     metadata = PluginMetadata(
-        id=body.get("id", ""),
-        name=body.get("name", ""),
-        version=body.get("version", "1.0.0"),
-        author=body.get("author", ""),
-        description=body.get("description", ""),
-        plugin_type=body.get("plugin_type", "connector"),
-        entry_point=body.get("entry_point", ""),
+        id=body.id,
+        name=body.name,
+        version=body.version,
+        author=body.author,
+        description=body.description,
+        plugin_type=body.plugin_type,
+        entry_point=body.entry_point,
     )
     success = plugin_registry.register(metadata)
     return {"success": success, "data": metadata.__dict__}

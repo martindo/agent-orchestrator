@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
+from pydantic import BaseModel, Field
 
 from ..middleware.tenant import create_tenant, delete_tenant, get_tenant, list_tenants
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
+
+
+class CreateTenantRequest(BaseModel):
+    tenant_id: str = Field(..., min_length=1)
+    tenant_name: str = Field(..., min_length=1)
 
 
 @router.get("/")
@@ -17,9 +23,9 @@ async def get_tenants() -> dict:
 
 
 @router.post("/")
-async def create_new_tenant(body: dict) -> dict:
+async def create_new_tenant(body: CreateTenantRequest) -> dict:
     """Create a new tenant."""
-    tenant = create_tenant(body.get("tenant_id", ""), body.get("tenant_name", ""))
+    tenant = create_tenant(body.tenant_id, body.tenant_name)
     return {"success": True, "data": tenant.__dict__}
 
 

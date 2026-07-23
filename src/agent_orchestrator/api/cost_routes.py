@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter
+from pydantic import BaseModel, Field
 
 from agent_orchestrator.core.cost_optimizer import (
     calculate_complexity_score,
@@ -19,40 +20,43 @@ from agent_orchestrator.core.cost_optimizer import (
 router = APIRouter(prefix="/cost", tags=["cost"])
 
 
-@router.post("/estimate")
-async def estimate_cost(body: dict[str, Any]) -> dict[str, object]:
-    """Estimate sprint cost with optimization recommendations.
+class EstimateCostRequest(BaseModel):
+    tasks: list[dict[str, Any]] = Field(default_factory=list)
+    preferred_provider: str = "anthropic"
 
-    Accepts a dict with 'tasks' (list of task dicts) and optional
-    'preferred_provider' (default: "anthropic").
+
+class ModelRecommendationRequest(BaseModel):
+    story_points: int = 1
+    description: str = ""
+    files_involved: int = 0
+    skill_required: str = "fullstack"
+    preferred_provider: str = "anthropic"
+
+
+@router.post("/estimate")
+async def estimate_cost(body: EstimateCostRequest) -> dict[str, object]:
+    """Estimate sprint cost with optimization recommendations.
 
     Returns:
         Cost estimation with optimized vs. premium totals and savings.
     """
-    tasks = body.get("tasks", [])
-    provider = body.get("preferred_provider", "anthropic")
-    return estimate_sprint_cost(tasks, str(provider))
+    return estimate_sprint_cost(body.tasks, body.preferred_provider)
 
 
 @router.post("/recommend-model")
-async def get_model_recommendation(body: dict[str, Any]) -> dict[str, object]:
+async def get_model_recommendation(body: ModelRecommendationRequest) -> dict[str, object]:
     """Get a model recommendation for a single task.
-
-    Accepts task attributes: story_points, description, files_involved,
-    skill_required, preferred_provider.
 
     Returns:
         Complexity score and model recommendation.
     """
-    description = body.get("description", "")
     score = calculate_complexity_score(
-        story_points=int(body.get("story_points", 1) or 1),
-        description_length=len(str(description)) if description else 0,
-        files_involved=int(body.get("files_involved", 0) or 0),
-        skill_required=str(body.get("skill_required", "fullstack")),
+        story_points=body.story_points or 1,
+        description_length=len(body.description),
+        files_involved=body.files_involved,
+        skill_required=body.skill_required,
     )
-    provider = body.get("preferred_provider", "anthropic")
-    rec = recommend_model(score, str(provider))
+    rec = recommend_model(score, body.preferred_provider)
     return {
         "complexity_score": round(score, 1),
         "recommendation": {

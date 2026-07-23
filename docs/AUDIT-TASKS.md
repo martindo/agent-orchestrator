@@ -21,7 +21,6 @@ No open task has a hard **logical** prerequisite on another — they are indepen
 | 4.6  | `core/engine.py` (ConnectorService wiring) | **ENGINE** | ” |
 | 3.6  | `core/phase_executor.py`, `core/gap_detector.py` | PHASE | yes — distinct from ENGINE |
 | 4.5-wire | `core/phase_executor.py`/`engine.py` + `adapters/metrics_adapter.py` (record real cost) | PHASE/ENGINE | pricing done; only the metrics wiring remains |
-| 2.5  | `api/{branching,communication,connector_instances,cost,plugin,scheduler,tenant}_routes.py` | ROUTES-B | yes — distinct route files from ROUTES-A |
 | 6.1  | `studio/routes/team_routes.py` | — | yes |
 | 4.8  | connectors `slack.py`, `jira.py` | — | yes |
 | 5.5  | `studio/tests/` (new test) | — | yes |
@@ -45,7 +44,7 @@ No open task has a hard **logical** prerequisite on another — they are indepen
 - [x] **2.2 (S)** Hardcoded JWT secret → env-driven + fail-closed. ✅ 2026-07-22 — `shared_auth.get_secret()` reads `AGENT_ORCH_JWT_SECRET`; `is_secret_secure()` reports the dev default as insecure; enabling auth on the default secret raises `ConfigurationError` (refuses to start on a forgeable secret).
 - [x] **2.3 (S)** Plaintext default credentials → hashed + gated. ✅ 2026-07-22 — passwords are stored as salted PBKDF2-HMAC-SHA256 (stdlib, no plaintext); the `admin`/`developer` convenience accounts are seeded only when auth is disabled (local dev) or `AGENT_ORCH_SEED_DEFAULT_USERS=true`, so a secured deployment ships no working default login. (User store is still in-memory — persistence tracked separately.)
 - [x] **2.4 (S)** Studio key handling aligned with the runtime. ✅ 2026-07-22 — `studio/routes/settings_routes.py` now strips env-sourced API keys on save (writes `""` when `os.environ[env_var] == key`) and re-applies them from env on load, so env-configured secrets aren't persisted to the plaintext `studio-settings.yaml` (matches the runtime `settings_store`). User-entered keys are still stored (parity with the runtime; full at-rest encryption is a separate, larger item). 3 studio tests → studio suite 98 pass.
-- [~] **2.5 (M)** ~15 endpoints accept raw `body: dict` with no Pydantic schema. Partial 2026-07-22 — the 4 auth endpoints now use request models (`LoginRequest`/`RegisterRequest`/`VerifyRequest`). **Still to do:** the remaining ~11 raw-`dict` endpoints.
+- [x] **2.5 (M)** Raw `dict` endpoints now use request models. ✅ 2026-07-22 — request models added to all 9 concrete raw-`dict` endpoints (branching evaluate/resolve, communication request/respond, cost estimate/recommend-model, plugin register, schedule create, tenant create) with required identifier fields → bad input returns 422 instead of silently defaulting. (Earlier: the 4 auth endpoints.) The 3 `connector_instances` `*_action` endpoints (`github_action`/`jira_action`/`slack_action`) are **intentionally** left as `dict` — the body is a dynamic, action-dependent passthrough to the connector, so a fixed schema would be wrong. 13 tests. Full suite → 1518 pass.
 
 ## Tier 3 — Make the core promises actually true
 
@@ -112,4 +111,5 @@ No open task has a hard **logical** prerequisite on another — they are indepen
 | 2026-07-22 | 6.3 | Branch `feat/connector-retry-safety`: non-idempotent writes no longer retried on ambiguous FAILURE/TIMEOUT (only UNAVAILABLE); reads unchanged. 5 tests + 2 updated. Full suite → 1498 pass. Merged (PR #15). |
 | 2026-07-22 | 2.4 | Branch `feat/studio-key-safety`: Studio strips env-sourced API keys on save + refills from env on load (aligns with runtime). 3 studio tests → studio suite 98 pass. Merged (PR #16). |
 | 2026-07-22 | 5.3 | Branch `feat/remove-cross-project-cruft`: deleted `_setup_packages.py` + its `__main__` hack; fixed coderswarm docstrings. 1 test. Full suite → 1499 pass. Merged (PR #17). |
-| 2026-07-22 | 5.4 + 5.6 | Branch `feat/strengthen-tests`: added real-adapter-path executor tests (5.4) and web-search request-correctness tests (5.6). 6 tests. Full suite → 1505 pass. |
+| 2026-07-22 | 5.4 + 5.6 | Branch `feat/strengthen-tests`: added real-adapter-path executor tests (5.4) and web-search request-correctness tests (5.6). 6 tests. Full suite → 1505 pass. Merged (PR #18). |
+| 2026-07-22 | 2.5 | Branch `feat/request-models`: Pydantic request models on the 9 concrete raw-`dict` endpoints (422 on bad input); 3 dynamic `*_action` passthroughs left as dict by design. 13 tests. Full suite → 1518 pass. |
