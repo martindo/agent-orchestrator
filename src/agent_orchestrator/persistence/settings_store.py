@@ -4,8 +4,6 @@ Uses temp file + rename pattern for corruption protection.
 Supports API key storage with environment variable fallback.
 
 Thread-safe: All public methods use internal lock.
-
-Reuses pattern from coderswarm-v2/ui/settings.py.
 """
 
 from __future__ import annotations
