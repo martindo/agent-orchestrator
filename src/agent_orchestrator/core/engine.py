@@ -238,6 +238,9 @@ class OrchestrationEngine:
 
             self._processing_task = asyncio.create_task(self._processing_loop())
 
+            # Re-enqueue work left unfinished by a previous run (crash recovery).
+            await self._recover_incomplete_work()
+
             # Start SLA monitor
             await self._start_sla_monitor()
 
@@ -307,7 +310,9 @@ class OrchestrationEngine:
 
         # Governance and observability
         self._governor = Governor(profile.governance)
-        self._review_queue = ReviewQueue()
+        # Persist pending reviews so human-review items survive a restart
+        # (the ReviewQueue supports JSONL persistence but was given no path).
+        self._review_queue = ReviewQueue(persistence_path=state_dir / "reviews.jsonl")
         self._audit_logger = AuditLogger(state_dir / "audit")
         self._metrics = MetricsCollector(state_dir / "metrics.jsonl")
 
@@ -583,6 +588,38 @@ class OrchestrationEngine:
         logger.info("Work item '%s' submitted (run_id=%s)", work_item.id, work_item.run_id)
         return work_item.id
 
+    async def _recover_incomplete_work(self) -> None:
+        """Re-enqueue non-terminal work items persisted by a previous run.
+
+        Without this a restart orphans unfinished work — the record survives in
+        the store but nothing re-queues it (audit 3.4). Items that were mid-
+        pipeline have their pipeline position restored so they resume at the
+        correct phase; queued-but-not-started items are simply re-enqueued and
+        enter the pipeline normally.
+        """
+        if self._work_item_store is None or self._queue is None or self._pipeline is None:
+            return
+        try:
+            incomplete = self._work_item_store.get_incomplete()
+        except Exception:
+            logger.error("Failed to load incomplete work for recovery", exc_info=True)
+            return
+
+        recovered = 0
+        for item in incomplete:
+            try:
+                if item.current_phase and self._pipeline.get_entry(item.id) is None:
+                    # Was mid-pipeline — restore its position so it resumes there.
+                    self._pipeline.enter_pipeline(item)
+                    self._pipeline.reset_to_phase(item.id, item.current_phase)
+                await self._queue.push(item)
+                recovered += 1
+            except Exception:
+                logger.error("Failed to recover work item '%s'", item.id, exc_info=True)
+
+        if recovered:
+            logger.info("Recovered %d incomplete work item(s) from persistence", recovered)
+
     async def _processing_loop(self) -> None:
         """Main loop — pulls items from queue and processes through pipeline."""
         logger.debug("Processing loop started")
@@ -642,23 +679,29 @@ class OrchestrationEngine:
                 run_id=_run_id,
             )
 
-        try:
-            phase_id = self._pipeline.enter_pipeline(work_item)
-        except WorkflowError as e:
-            logger.error("Failed to enter pipeline: %s", e, exc_info=True)
-            work_item.record_transition(WorkItemStatus.FAILED, reason=str(e))
-            work_item.error = str(e)
-            self._persist_work_item(work_item)
-            if self._audit_logger is not None:
-                self._audit_logger.append(
-                    RecordType.ERROR,
-                    "pipeline.entry_failed",
-                    str(e),
-                    work_id=work_item.id,
-                    app_id=_app_id,
-                    run_id=_run_id,
-                )
-            return
+        existing_entry = self._pipeline.get_entry(work_item.id)
+        if existing_entry is not None:
+            # Resuming a recovered item already placed in the pipeline at its
+            # restored phase (see _recover_incomplete_work).
+            phase_id = existing_entry.current_phase_id
+        else:
+            try:
+                phase_id = self._pipeline.enter_pipeline(work_item)
+            except WorkflowError as e:
+                logger.error("Failed to enter pipeline: %s", e, exc_info=True)
+                work_item.record_transition(WorkItemStatus.FAILED, reason=str(e))
+                work_item.error = str(e)
+                self._persist_work_item(work_item)
+                if self._audit_logger is not None:
+                    self._audit_logger.append(
+                        RecordType.ERROR,
+                        "pipeline.entry_failed",
+                        str(e),
+                        work_id=work_item.id,
+                        app_id=_app_id,
+                        run_id=_run_id,
+                    )
+                return
 
         # Process through phases until complete or terminal
         while phase_id is not None:
