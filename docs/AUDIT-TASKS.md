@@ -20,7 +20,6 @@ No open task has a hard **logical** prerequisite on another — they are indepen
 | 3.7  | `core/engine.py` (completion path) + `catalog/` | **ENGINE** | ” |
 | 3.6  | `core/phase_executor.py`, `core/gap_detector.py` | PHASE | yes — distinct from ENGINE |
 | 4.5-wire | `core/phase_executor.py`/`engine.py` + `adapters/metrics_adapter.py` (record real cost) | PHASE/ENGINE | pricing done; only the metrics wiring remains |
-| 6.1  | `studio/routes/team_routes.py` | — | yes |
 | 4.8  | connectors `slack.py`, `jira.py` | — | yes |
 | 6.2  | `mcp/client_manager.py` | — | yes |
 
@@ -77,7 +76,7 @@ No open task has a hard **logical** prerequisite on another — they are indepen
 
 ## Tier 6 — Robustness / follow-ups
 
-- [ ] **6.1 (M)** Studio project state is in-memory/volatile — a single global `current_team` (`studio/routes/team_routes.py`), no project list/multi-project, lost on restart. Persist projects.
+- [x] **6.1 (M)** Studio working team now persists across restart. ✅ 2026-07-22 — the working `current_team` is written to `{workspace}/current-team.yaml` on every create/update/import and lazily reloaded on `GET /current`, so it survives a backend restart (was in-memory only). Best-effort persistence (falls back to in-memory if no workspace). 3 studio tests → studio suite 102 pass. **Note:** true multi-project (a project list / switch) is a larger feature and remains out of scope here — this fixes the "volatile / lost on restart" core issue.
 - [ ] **6.2 (M)** MCP client session lifecycle is fragile — `mcp/client_manager._create_session:151-177` manually drives anyio context managers across call frames; may throw "cancel scope in different task" against live servers. Restructure to enter/exit within one task (e.g. an `AsyncExitStack` owned by a single task).
 - [x] **6.3 (S)** Connector write retries made safe. ✅ 2026-07-22 — for non-idempotent (non-`read_only`) operations the executor now narrows the retryable set to `{UNAVAILABLE}` only: a generic `FAILURE` or `TIMEOUT` may mean the write already (partially) applied, so retrying could duplicate it (create_ticket, send_message). Reads keep the full retry set; unknown/undeclared ops are treated as writes (conservative). 5 tests (+ updated 2 mock-based retry tests to declare their read op). Full suite → 1498 pass.
 - [x] **6.4 (S)** Provider token-usage evened out. ✅ 2026-07-22 — Google (`usage_metadata` → prompt/candidates/total) and Ollama (`prompt_eval_count`/`eval_count`) providers now return a `usage` dict like OpenAI/Anthropic; nothing is fabricated when the API reports none. 4 tests. Unblocks the 4.5 cost-accounting wiring for these providers.
@@ -112,4 +111,5 @@ No open task has a hard **logical** prerequisite on another — they are indepen
 | 2026-07-22 | 5.4 + 5.6 | Branch `feat/strengthen-tests`: added real-adapter-path executor tests (5.4) and web-search request-correctness tests (5.6). 6 tests. Full suite → 1505 pass. Merged (PR #18). |
 | 2026-07-22 | 2.5 | Branch `feat/request-models`: Pydantic request models on the 9 concrete raw-`dict` endpoints (422 on bad input); 3 dynamic `*_action` passthroughs left as dict by design. 13 tests. Full suite → 1518 pass. Merged (PR #19). |
 | 2026-07-22 | 4.6 + 5.5 | Branch `feat/wire-contract-validator` (quick wins): engine injects a contract validator into ConnectorService (4.6); Studio generator→runtime-loader e2e test + studio CI installs runtime (5.5). 2 tests. (3.6 re-scoped as not-quick — needs event plumbing.) Merged (PR #20). |
-| 2026-07-22 | 4.1 | Branch `feat/wire-embeddings`: engine builds a real EmbeddingService from a configured key and wires it into KnowledgeStore, so semantic_query is live (keyword fallback with no key). 5 wiring tests. Full suite → 1524 pass. |
+| 2026-07-22 | 4.1 | Branch `feat/wire-embeddings`: engine builds a real EmbeddingService from a configured key and wires it into KnowledgeStore, so semantic_query is live (keyword fallback with no key). 5 wiring tests. Full suite → 1524 pass. Merged (PR #21). |
+| 2026-07-22 | 6.1 | Branch `feat/studio-project-persistence`: Studio working team persisted to `current-team.yaml` + lazy reload → survives restart. 3 studio tests → studio suite 102 pass. (Multi-project switch remains future scope.) |
