@@ -84,11 +84,14 @@ jobs:
           cache: pip
           cache-dependency-path: studio/pyproject.toml
 
-      - name: Install studio
-        working-directory: studio
+      - name: Install runtime + studio
+        # The runtime (with llm/mcp extras, required to import agent_orchestrator)
+        # is installed so the generator→loader e2e test (audit 5.5) actually runs
+        # rather than skipping; studio is installed for its own suite.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,llm,mcp]"
+          pip install -e "./studio[dev]"
 
       - name: Run pytest
         working-directory: studio
