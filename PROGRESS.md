@@ -1,8 +1,13 @@
 # agent-orchestrator Progress
 
-## Status: Phase 34 Complete — All Platform Features Implemented
+## Status: Feature-complete through Phase 34; hardening in progress
 
-Last updated: 2026-03-14
+Last updated: 2026-07-22
+
+> The phase list below tracks features that were *built*. It is not a statement
+> that the platform is free of known gaps. An audit (**docs/AUDIT-TASKS.md**) is
+> tracking and fixing the differences between these completion claims and
+> runtime behavior; consult it for current status.
 
 ## Completed
 
@@ -269,7 +274,7 @@ Last updated: 2026-03-14
   - governance/review_queue.py — JSONL persistence for review items (no more in-memory-only loss)
   - governance/governor.py — Safe policy evaluation (no eval/exec of arbitrary expressions)
   - governance/audit_logger.py — Log rotation support; audit file size management
-  - adapters/webhook_adapter.py — Full webhook delivery implementation (httpx-based POST with retries)
+  - adapters/webhook_adapter.py — Webhook delivery (httpx-based POST). NOTE: retry/backoff is not yet implemented (single POST) — tracked in docs/AUDIT-TASKS.md §4.3.
   - core/phase_executor.py — Phase timeout enforcement via asyncio.wait_for
   - core/agent_executor.py — Multi-dimensional scoring (beyond single confidence float)
   - governance/review_queue.py — Review SLA tracking (deadline, escalation)
@@ -319,13 +324,22 @@ Last updated: 2026-03-14
 
 ## Test Summary
 
-- **Runtime tests:** 1356 passing
+CI (`.github/workflows/ci.yml`) is the source of truth for test counts and pass
+state; the numbers below are a dated snapshot.
+
+- **Runtime tests:** 1464 passing (as of 2026-07-22)
 - **Studio tests:** 95 passing
-- **Total:** 1451 tests
+
+The previously stated "1451 total" predated CI and was never gated — an audit
+found the suite could not even be collected without the optional `llm`/`mcp`
+extras and that 14 tests had rotted to red (now fixed). See docs/AUDIT-TASKS.md
+§5.1 / §5.7.
 
 ## Known Issues
 
-- (none)
+Tracked in **docs/AUDIT-TASKS.md** — a tiered audit backlog of gaps between the
+completion claims above and runtime behavior, with fixes checked off as they
+land. (The earlier "(none)" here was inaccurate.)
 
 ## Architecture Highlights
 

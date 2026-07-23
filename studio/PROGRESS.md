@@ -18,7 +18,7 @@ Last updated: 2026-03-13
 | 8 | **P8: Workflow Graph Validation** | DONE | graph/validator.py — DAG analysis, orphan detection, reachability |
 | 9 | **P6: Connector Discovery** | DONE | connectors/discovery.py — query runtime /connectors/providers |
 | 10 | **P9: Deploy Profiles** | DONE | deploy/deployer.py — write files + trigger runtime reload |
-| 11 | **P12: V1 Frontend** | DONE | React 18 + TypeScript + Tailwind: 7 pages, API client, Zustand store, React Flow graph |
+| 11 | **P12: V1 Frontend** | DONE | React 18 + TypeScript + Tailwind: 9 pages, API client, Zustand store, React Flow graph |
 | 12 | **P10: Extension Stubs** | DONE | extensions/generator.py — connector, event handler, hook stubs |
 | 13 | **P14: Regeneration Boundaries** | DONE | manifest/tracker.py — .studio-manifest.json ownership tracking |
 | 14 | **P11: Prompt Packs** | DONE | prompts/generator.py — 5 prompt types for coding assistants |
@@ -63,7 +63,7 @@ Last updated: 2026-03-13
 **Frontend (13 TypeScript/TSX files):**
 - src/App.tsx, main.tsx, index.css, types.ts
 - src/api/client.ts, src/store/teamStore.ts
-- src/pages/ (7 page components)
+- src/pages/ (9 page components)
 - src/components/common/ (Sidebar, Modal)
 - Config: package.json, tsconfig.json, vite.config.ts, tailwind.config.js
 

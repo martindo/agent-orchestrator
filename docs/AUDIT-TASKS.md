@@ -10,6 +10,37 @@ Effort tags: **S** = under a day, **M** = 1–3 days, **L** = a week+.
 
 ---
 
+## Concurrency & dependency map (remaining open tasks)
+
+No open task has a hard **logical** prerequisite on another — they are independent fixes. The only constraint is **file collisions**: tasks that edit the same file must be serialized or bundled into one PR; tasks in different groups are safe to run in parallel. Rule of thumb: **pick at most one task per Group at a time**; anything with Group `—` is a standalone file and parallel-safe with everything.
+
+| Task | Touches (primary files) | Group | Parallel-safe |
+|------|-------------------------|-------|---------------|
+| 1.3  | `core/engine.py` | **ENGINE** | with any non-ENGINE task |
+| 3.4  | `core/engine.py` (+ work-queue/pipeline restore) | **ENGINE** | ” |
+| 3.5  | `core/engine.py` (review-queue path) | **ENGINE** | ” |
+| 3.7  | `core/engine.py` (completion path) + `catalog/` | **ENGINE** | ” |
+| 4.6  | `core/engine.py` (ConnectorService wiring) | **ENGINE** | ” |
+| 3.6  | `core/phase_executor.py`, `core/gap_detector.py` | PHASE | yes — distinct from ENGINE |
+| 4.5  | `core/cost_optimizer.py`, `adapters/providers/*` | **PROVIDERS** | with any non-PROVIDERS task |
+| 6.4  | `adapters/providers/{google,ollama}_provider.py` | **PROVIDERS** | ” |
+| 1.5  | `api/routes.py`, `api/benchmark_routes.py` | ROUTES-A | yes |
+| 2.5  | `api/{branching,communication,connector_instances,cost,plugin,scheduler,tenant}_routes.py` | ROUTES-B | yes — distinct route files from ROUTES-A |
+| 2.4  | `studio/routes/settings_routes.py` | — | yes |
+| 6.1  | `studio/routes/team_routes.py` | — | yes |
+| 4.3  | `adapters/webhook_adapter.py` | — | yes |
+| 4.8  | connectors `slack.py`, `jira.py` | — | yes |
+| 5.3  | `_setup_packages.py`, `persistence/settings_store.py` | — | yes |
+| 5.4  | `tests/unit/test_core.py` | — | yes |
+| 5.5  | `studio/tests/` (new test) | — | yes |
+| 5.6  | `tests/unit/test_web_search_providers.py` | — | yes |
+| 6.2  | `mcp/client_manager.py` | — | yes |
+| 6.3  | `connectors/executor.py` | — | yes |
+
+**Reading it:** the **ENGINE** group (1.3, 3.4, 3.5, 3.7, 4.6) all edit `core/engine.py` → do them one-at-a-time or bundled, **not** as parallel branches (this is why 3.4 + 3.5 can't be concurrent). **PROVIDERS** (4.5, 6.4) likewise share the provider files. Everything else is independent — e.g. you could safely run **one ENGINE task + 4.5 + 1.5 + 2.5 + 4.3 + 6.2** as six parallel branches. When adding a new task, give it a *Touches / Group* label so this stays current.
+
+---
+
 ## Tier 1 — Correctness quick wins (latent bugs; small diffs)
 
 - [x] **1.1 (S)** `_artifact_store` dead on every startup (`state_dir` used before assignment → swallowed `UnboundLocalError`). ✅ 2026-07-22 — moved the `state_dir` definition + `mkdir` above the artifact-store init; artifact persistence now initializes. Runtime-verified: full suite green.
@@ -44,7 +75,7 @@ Effort tags: **S** = under a day, **M** = 1–3 days, **L** = a week+.
 - [x] **4.4 (L)** **Tiered persistence infrastructure — DONE.** Decision (2026-07-22): *build it*, all three tiers real (file → sqlite → postgresql). ✅ Done so far: a SQLAlchemy-Core SQL layer (`persistence/sql/`: `engine.py` URL resolution + engine cache + `create_all` bootstrap, `tables.py` portable metadata, `work_item_store.py`), a `persistence/backend.py` dispatch factory + `WorkItemStoreProtocol`, `persistence_backend` now actually drives store selection (env `AGENT_ORCH_PERSISTENCE_BACKEND` / `AGENT_ORCH_DATABASE_URL` overrides), the engine wired to the factory, compose now passes `DATABASE_URL` to the app (was the missing wire), a `sql` extra, and a **Postgres CI service job**. Stores converted & verified on **both SQLite and real PostgreSQL**: **work-item**, **artifact** (content-addressable), and **state** (namespaced KV). File stays the default → 1402 passing. **Deliberately not SQL-backed** (documented, not skipped): `config_history` versions config *files* on disk (returns `Path`, restores to a path — inherently filesystem); `lineage` is a *derived* read (`LineageBuilder` builds a graph from the other stores — no persistence of its own, so it inherits their backend for free); `settings_store` owns the YAML settings file with env-var fallback for API keys (config, not runtime state). **Schema reconciled (2026-07-22):** the SQLAlchemy metadata is now the single source of truth — `persistence/sql/schema.py` renders deterministic DDL, `db/schema.sql` is generated from it and guarded by a drift test, and the aspirational hand-written 30-table schema (which nothing ever wired) was retired to `db/reference/` with a `db/README.md` explaining the relationship. The redundant `docker-entrypoint-initdb.d` mount was removed — the app owns its schema via `create_all` on startup. Only (optional) leftover: `StateStore` is defined but currently unused at runtime, so its SQL impl is ready-for-use rather than on a live path.
 - [ ] **4.5 (S)** Cost tracking is fake — providers return real `usage` tokens but nothing prices them; `core/cost_optimizer.py:39-48` uses a flat `cost_per_1k * 10` guess with **invalid/stale model IDs** (`claude-sonnet-4-6`, `claude-opus-4-6`, `o3`). Price real usage; fix the model IDs.
 - [ ] **4.6 (S)** Contract validation is dormant — `engine.py:312` builds `ConnectorService` **without** a `contract_validator`, so `_validate_input/output_contract` always early-returns; the whole contracts framework (Phase 19, 59 tests) never runs on the default execute path. Inject the validator, or document it as opt-in.
-- [~] **4.7 (S)** Docs honesty: PROGRESS.md "zero known issues" is false; ~~the Phase-32 "no eval/exec" claim is contradicted (see 4.2)~~ **now true (4.2 done)**; ~~"tamper-evident audit trail" (3.2)~~ **now true (3.2 done)**; "webhook retries" (4.3) overstates; Studio frontend page count is understated (9, not 8 — docs undercount, unusual). Reconcile the remaining claims.
+- [x] **4.7 (S)** Docs honesty pass done. ✅ 2026-07-22 — PROGRESS.md: the "Phase 34 Complete — All Platform Features Implemented" header + "Known Issues: (none)" now point to docs/AUDIT-TASKS.md as the tracked gap list; the stale "1451 tests" total is replaced with a CI-is-source-of-truth note (and the collection/rot caveat); the webhook line no longer claims "with retries" (notes single-POST, links §4.3). studio/PROGRESS.md page count corrected 7→9. The "no eval/exec" (4.2) and "tamper-evident audit trail" (3.2) claims were made *true* by earlier fixes, so they stand. (Implementing webhook retries to make that claim true too is tracked separately as 4.3.)
 - [ ] **4.8 (S)** Deprecated upstream endpoints — Slack `files.upload` (`slack.py:498`) and Jira `/rest/api/3/search` (`jira.py:345`) are deprecated by the vendors and will break over time; migrate.
 
 ## Tier 5 — Foundation (CI, hygiene, tests)
@@ -81,4 +112,5 @@ Effort tags: **S** = under a day, **M** = 1–3 days, **L** = a week+.
 | 2026-07-22 | 3.2 | Branch `feat/tamper-evident-audit`: made the audit trail genuinely tamper-evident — full-record + full-digest hashing (data payload now protected), verify_chain recomputes hashes and walks rotated segments, rotation no longer severs the chain, microsecond-unique rotated filenames. 11 tamper tests. Full suite → 1414 pass. Merged (PR #5). |
 | 2026-07-22 | 3.3 | Branch `feat/decision-ledger-hash`: decision-ledger record hash now covers ALL fields (was omitting tool_calls/warnings/review_notes/duration_seconds/metadata). Shared `_hash_record_dict` used by write + verify. 16 tests. Full suite → 1422 pass. Merged (PR #6). |
 | 2026-07-22 | 3.1 | Branch `feat/real-confidence-governance`: wired real agent confidence into governance — prompt asks for a `CONFIDENCE:` marker, executor parses it into the output dict, so extract/aggregate see real values and ABORT/QUEUE_FOR_REVIEW can finally fire (proven end-to-end through the Governor). 19 tests. Full suite → 1441 pass. Merged (PR #7). |
-| 2026-07-22 | 4.2 | Branch `feat/safe-branching-eval`: removed `eval()` from workflow branching; delegates to the safe `ast.literal_eval`-based evaluator (flat and/or/not in). 23 tests (module was untested) incl. security/injection cases. Full suite → 1464 pass. |
+| 2026-07-22 | 4.2 | Branch `feat/safe-branching-eval`: removed `eval()` from workflow branching; delegates to the safe `ast.literal_eval`-based evaluator (flat and/or/not in). 23 tests (module was untested) incl. security/injection cases. Full suite → 1464 pass. Merged (PR #8). |
+| 2026-07-22 | 4.7 | Branch `feat/docs-honesty`: reconciled PROGRESS.md (status header, "Known Issues (none)", stale "1451 tests", webhook "with retries") and studio page count 7→9. Docs-only. |
