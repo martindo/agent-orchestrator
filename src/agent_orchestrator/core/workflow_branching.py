@@ -7,8 +7,9 @@ which phase should execute next based on success/failure/confidence.
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any, Optional
+
+from agent_orchestrator.governance.governor import _evaluate_condition
 
 logger = logging.getLogger(__name__)
 
@@ -16,34 +17,49 @@ logger = logging.getLogger(__name__)
 def evaluate_branch_condition(condition: str, context: dict[str, Any]) -> bool:
     """Evaluate a branch condition expression against execution context.
 
-    Supports: >=, <=, ==, !=, >, <, in, not in, and, or.
-    Context values are substituted before evaluation.
+    Uses the same ``ast.literal_eval``-based evaluator as governor/quality_gate
+    — there is **no** ``eval()`` and no string substitution, so conditions can't
+    execute arbitrary code (audit 4.2; the old implementation substituted
+    context values into a string and ``eval``'d it behind a permissive regex).
+
+    Supported grammar:
+      * atomic comparison ``<key> <op> <literal>`` for op in ``== != >= <= > <``
+      * membership ``<key> in <literal>`` and ``<key> not in <literal>``
+      * flat boolean combination with ``and`` / ``or`` (no parentheses/nesting)
+
+    Anything else — including keys not present in the context — evaluates to
+    ``False`` (fail-closed).
 
     Args:
-        condition: Expression string with context keys as placeholders.
-        context: Key-value pairs to substitute into the expression.
+        condition: Condition expression (e.g. ``"confidence >= 0.8"``).
+        context: Variable bindings (the completed phase's result).
 
     Returns:
-        True if the condition evaluates to truthy, False otherwise.
+        True if the condition is satisfied, else False.
     """
+    if not condition or not condition.strip():
+        return False
     try:
-        expr = condition
-        for key, value in context.items():
-            if isinstance(value, str):
-                expr = expr.replace(key, f"'{value}'")
-            else:
-                expr = expr.replace(key, str(value))
-
-        # Safe evaluation — only allow comparisons and boolean logic
-        allowed = re.compile(r'^[\d\s\.\'\"\[\],>=<!andorint\(\)]+$')
-        if not allowed.match(expr):
-            logger.warning("Unsafe branch condition blocked: %s", condition)
-            return False
-
-        return bool(eval(expr))  # noqa: S307 — validated above
+        return _eval_or(condition, context)
     except Exception as exc:
         logger.warning("Failed to evaluate branch condition '%s': %s", condition, exc)
         return False
+
+
+def _eval_or(expr: str, context: dict[str, Any]) -> bool:
+    return any(_eval_and(part, context) for part in expr.split(" or "))
+
+
+def _eval_and(expr: str, context: dict[str, Any]) -> bool:
+    return all(_eval_atom(part, context) for part in expr.split(" and "))
+
+
+def _eval_atom(expr: str, context: dict[str, Any]) -> bool:
+    expr = expr.strip()
+    if " not in " in expr:
+        key, _, rhs = expr.partition(" not in ")
+        return not _evaluate_condition(f"{key.strip()} in {rhs.strip()}", context)
+    return _evaluate_condition(expr, context)
 
 
 def resolve_next_phase(
