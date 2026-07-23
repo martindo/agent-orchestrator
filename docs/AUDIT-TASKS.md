@@ -10,6 +10,37 @@ Effort tags: **S** = under a day, **M** = 1–3 days, **L** = a week+.
 
 ---
 
+## Concurrency & dependency map (remaining open tasks)
+
+No open task has a hard **logical** prerequisite on another — they are independent fixes. The only constraint is **file collisions**: tasks that edit the same file must be serialized or bundled into one PR; tasks in different groups are safe to run in parallel. Rule of thumb: **pick at most one task per Group at a time**; anything with Group `—` is a standalone file and parallel-safe with everything.
+
+| Task | Touches (primary files) | Group | Parallel-safe |
+|------|-------------------------|-------|---------------|
+| 1.3  | `core/engine.py` | **ENGINE** | with any non-ENGINE task |
+| 3.4  | `core/engine.py` (+ work-queue/pipeline restore) | **ENGINE** | ” |
+| 3.5  | `core/engine.py` (review-queue path) | **ENGINE** | ” |
+| 3.7  | `core/engine.py` (completion path) + `catalog/` | **ENGINE** | ” |
+| 4.6  | `core/engine.py` (ConnectorService wiring) | **ENGINE** | ” |
+| 3.6  | `core/phase_executor.py`, `core/gap_detector.py` | PHASE | yes — distinct from ENGINE |
+| 4.5  | `core/cost_optimizer.py`, `adapters/providers/*` | **PROVIDERS** | with any non-PROVIDERS task |
+| 6.4  | `adapters/providers/{google,ollama}_provider.py` | **PROVIDERS** | ” |
+| 1.5  | `api/routes.py`, `api/benchmark_routes.py` | ROUTES-A | yes |
+| 2.5  | `api/{branching,communication,connector_instances,cost,plugin,scheduler,tenant}_routes.py` | ROUTES-B | yes — distinct route files from ROUTES-A |
+| 2.4  | `studio/routes/settings_routes.py` | — | yes |
+| 6.1  | `studio/routes/team_routes.py` | — | yes |
+| 4.3  | `adapters/webhook_adapter.py` | — | yes |
+| 4.8  | connectors `slack.py`, `jira.py` | — | yes |
+| 5.3  | `_setup_packages.py`, `persistence/settings_store.py` | — | yes |
+| 5.4  | `tests/unit/test_core.py` | — | yes |
+| 5.5  | `studio/tests/` (new test) | — | yes |
+| 5.6  | `tests/unit/test_web_search_providers.py` | — | yes |
+| 6.2  | `mcp/client_manager.py` | — | yes |
+| 6.3  | `connectors/executor.py` | — | yes |
+
+**Reading it:** the **ENGINE** group (1.3, 3.4, 3.5, 3.7, 4.6) all edit `core/engine.py` → do them one-at-a-time or bundled, **not** as parallel branches (this is why 3.4 + 3.5 can't be concurrent). **PROVIDERS** (4.5, 6.4) likewise share the provider files. Everything else is independent — e.g. you could safely run **one ENGINE task + 4.5 + 1.5 + 2.5 + 4.3 + 6.2** as six parallel branches. When adding a new task, give it a *Touches / Group* label so this stays current.
+
+---
+
 ## Tier 1 — Correctness quick wins (latent bugs; small diffs)
 
 - [x] **1.1 (S)** `_artifact_store` dead on every startup (`state_dir` used before assignment → swallowed `UnboundLocalError`). ✅ 2026-07-22 — moved the `state_dir` definition + `mkdir` above the artifact-store init; artifact persistence now initializes. Runtime-verified: full suite green.
