@@ -492,6 +492,14 @@ class SlackMessagingProvider(BaseMessagingProvider):
         Raises:
             MessagingProviderError: When the Slack API returns an error.
         """
+        # DEPRECATED — audit 4.8 (deferred, do not silently drop): Slack has
+        # deprecated `files.upload` and set a sunset date, so this single-call
+        # upload will stop working. Migration is a 3-step flow:
+        #   1) files.getUploadURLExternal  -> returns upload_url + file_id
+        #   2) PUT the file bytes to upload_url
+        #   3) files.completeUploadExternal -> finalize + share to channels
+        # Left as-is for now because it still works and the new flow needs
+        # validation against the live Slack API (no sandbox available here).
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
