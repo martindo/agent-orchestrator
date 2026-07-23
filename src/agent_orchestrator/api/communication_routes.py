@@ -3,32 +3,46 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
+from pydantic import BaseModel, Field
 
 from agent_orchestrator.core.agent_communication import communication_hub
 
 router = APIRouter(prefix="/communication", tags=["communication"])
 
 
+class AssistanceRequest(BaseModel):
+    requesting_agent_id: str = Field(..., min_length=1)
+    target_role: str = Field(..., min_length=1)
+    work_item_id: str = Field(..., min_length=1)
+    question: str = Field(..., min_length=1)
+    context: dict = Field(default_factory=dict)
+
+
+class RespondRequest(BaseModel):
+    responding_agent_id: str = Field(..., min_length=1)
+    response: str = Field(..., min_length=1)
+
+
 @router.post("/request")
-async def request_assistance(body: dict) -> dict:
+async def request_assistance(body: AssistanceRequest) -> dict:
     """Create a new assistance request from one agent to a target role."""
     req = communication_hub.request_assistance(
-        requesting_agent_id=body.get("requesting_agent_id", ""),
-        target_role=body.get("target_role", ""),
-        work_item_id=body.get("work_item_id", ""),
-        question=body.get("question", ""),
-        context=body.get("context", {}),
+        requesting_agent_id=body.requesting_agent_id,
+        target_role=body.target_role,
+        work_item_id=body.work_item_id,
+        question=body.question,
+        context=body.context,
     )
     return {"success": True, "data": req.__dict__}
 
 
 @router.post("/respond/{request_id}")
-async def respond_to_request(request_id: str, body: dict) -> dict:
+async def respond_to_request(request_id: str, body: RespondRequest) -> dict:
     """Respond to a pending assistance request."""
     req = communication_hub.respond(
         request_id,
-        body.get("responding_agent_id", ""),
-        body.get("response", ""),
+        body.responding_agent_id,
+        body.response,
     )
     if not req:
         return {"success": False, "error": "Request not found or already responded"}

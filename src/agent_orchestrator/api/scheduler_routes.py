@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
+from pydantic import BaseModel, Field
 
 from agent_orchestrator.core.scheduler import ScheduleEntry, scheduler
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
+
+
+class CreateScheduleRequest(BaseModel):
+    workflow_id: str = Field(..., min_length=1)
+    id: str | None = None
+    cron: str = "interval:3600"
+    input_template: dict = Field(default_factory=dict)
+    enabled: bool = True
 
 
 @router.get("/")
@@ -17,14 +26,14 @@ async def list_schedules() -> dict:
 
 
 @router.post("/")
-async def create_schedule(body: dict) -> dict:
+async def create_schedule(body: CreateScheduleRequest) -> dict:
     """Create a new schedule entry."""
     entry = ScheduleEntry(
-        id=body.get("id", f"sched-{len(scheduler.get_all()) + 1}"),
-        cron=body.get("cron", "interval:3600"),
-        workflow_id=body.get("workflow_id", ""),
-        input_template=body.get("input_template", {}),
-        enabled=body.get("enabled", True),
+        id=body.id or f"sched-{len(scheduler.get_all()) + 1}",
+        cron=body.cron,
+        workflow_id=body.workflow_id,
+        input_template=body.input_template,
+        enabled=body.enabled,
     )
     scheduler.add_schedule(entry)
     return {"success": True, "data": entry.__dict__}
