@@ -33,21 +33,67 @@ class ModelRecommendation:
     reason: str
 
 
-# Cost tiers mapping provider models to approximate per-1K-token costs
-MODEL_TIERS: dict[str, list[dict[str, str | float]]] = {
+# Approximate public list prices in USD per 1K tokens, split by input vs output
+# (providers charge different rates for each). These are list prices and should
+# be reviewed periodically; `price_usage` uses them to price REAL token usage.
+# This is the single source of truth for model pricing.
+_TOKEN_PRICING: dict[str, dict[str, float]] = {
+    "claude-haiku-4-5-20251001": {"input": 0.001, "output": 0.005},
+    "claude-sonnet-5":           {"input": 0.003, "output": 0.015},
+    "claude-opus-4-8":           {"input": 0.015, "output": 0.075},
+    "gpt-4o-mini":               {"input": 0.00015, "output": 0.0006},
+    "gpt-4o":                    {"input": 0.0025, "output": 0.01},
+    "o3":                        {"input": 0.01, "output": 0.04},
+}
+
+# Cost tiers mapping task complexity to a current, valid model per provider.
+# (Was pointing at non-existent IDs: claude-sonnet-4-6, claude-opus-4-6.)
+MODEL_TIERS: dict[str, list[dict[str, str]]] = {
     "economy": [
-        {"provider": "anthropic", "model": "claude-haiku-4-5-20251001", "cost_per_1k_tokens": 0.001},
-        {"provider": "openai", "model": "gpt-4o-mini", "cost_per_1k_tokens": 0.00015},
+        {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+        {"provider": "openai", "model": "gpt-4o-mini"},
     ],
     "standard": [
-        {"provider": "anthropic", "model": "claude-sonnet-4-6", "cost_per_1k_tokens": 0.003},
-        {"provider": "openai", "model": "gpt-4o", "cost_per_1k_tokens": 0.005},
+        {"provider": "anthropic", "model": "claude-sonnet-5"},
+        {"provider": "openai", "model": "gpt-4o"},
     ],
     "premium": [
-        {"provider": "anthropic", "model": "claude-opus-4-6", "cost_per_1k_tokens": 0.015},
-        {"provider": "openai", "model": "o3", "cost_per_1k_tokens": 0.01},
+        {"provider": "anthropic", "model": "claude-opus-4-8"},
+        {"provider": "openai", "model": "o3"},
     ],
 }
+
+# Token profile assumed when *estimating* a task's cost up front. Real usage is
+# priced exactly via price_usage() once the provider returns token counts.
+_EST_INPUT_TOKENS = 8000
+_EST_OUTPUT_TOKENS = 2000
+
+
+def price_usage(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    """Price actual token usage at the model's per-1K input/output rates.
+
+    Args:
+        model: The model identifier (must be a key in ``_TOKEN_PRICING``).
+        prompt_tokens: Input tokens consumed.
+        completion_tokens: Output tokens produced.
+
+    Returns:
+        Cost in USD, or 0.0 for an unknown model (logged).
+    """
+    rate = _TOKEN_PRICING.get(model)
+    if rate is None:
+        logger.warning("No pricing table entry for model %r; cost recorded as 0.0", model)
+        return 0.0
+    return (
+        (prompt_tokens / 1000.0) * rate["input"]
+        + (completion_tokens / 1000.0) * rate["output"]
+    )
+
+
+def estimate_task_cost(model: str) -> float:
+    """Estimate one task's cost from real per-model rates and an assumed token
+    profile (used before real usage is known)."""
+    return price_usage(model, _EST_INPUT_TOKENS, _EST_OUTPUT_TOKENS)
 
 # Skill-based complexity weight multipliers
 _SKILL_WEIGHTS: dict[str, float] = {
@@ -118,9 +164,8 @@ def recommend_model(
         models[0],
     )
 
-    # Rough estimate: ~10K tokens per task
-    cost_per_1k = float(model["cost_per_1k_tokens"])
-    estimated_cost = cost_per_1k * 10
+    # Estimate from real per-model input/output rates (was a flat cost_per_1k*10).
+    estimated_cost = estimate_task_cost(model["model"])
 
     return ModelRecommendation(
         provider=str(model["provider"]),
