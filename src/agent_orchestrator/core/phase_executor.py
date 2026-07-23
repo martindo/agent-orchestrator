@@ -361,11 +361,13 @@ class PhaseExecutor:
                     "phase_id": phase.id,
                     "success": result.success,
                     "duration": result.duration_seconds,
-                    # Enriched so the skill map (audit 3.7) and gap collector can
-                    # learn from real runs: the agent's declared skills and the
-                    # self-reported confidence.
+                    # Enriched so the skill map (audit 3.7), gap collector, and
+                    # cost tracking (audit 4.5) can learn from real runs.
                     "confidence": extract_confidence(result.output) if result.output else 0.0,
                     "skills": list(getattr(instance.definition, "skills", []) or []),
+                    "usage": (result.output or {}).get("usage", {}),
+                    "model": (result.output or {}).get("model")
+                    or getattr(instance.definition.llm, "model", ""),
                 },
                 source="phase_executor",
             ))

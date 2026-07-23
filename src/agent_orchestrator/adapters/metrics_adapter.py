@@ -80,6 +80,20 @@ class MetricsCollector:
         with self._lock:
             return self._counters.get(name, 0)
 
+    @property
+    def total_cost(self) -> float:
+        """Cumulative LLM cost in USD (from priced provider usage — audit 4.5).
+
+        Populated by the engine recording ``llm.cost`` per agent execution;
+        read by the platform cost endpoints.
+        """
+        return self.get_counter("llm.cost")
+
+    @property
+    def total_tokens(self) -> float:
+        """Cumulative LLM tokens (prompt + completion) across agent executions."""
+        return self.get_counter("llm.tokens")
+
     def get_summary(self) -> dict[str, Any]:
         """Get summary of all metrics."""
         with self._lock:

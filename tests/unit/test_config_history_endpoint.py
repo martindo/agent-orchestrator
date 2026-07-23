@@ -20,16 +20,18 @@ API = "/api/v1"
 # ---- AgentManager.list_config_history ---------------------------------------
 
 
-def test_history_empty_without_history_dir(tmp_path):
-    # No .history dir → history disabled → empty list (honest, not a crash).
+def test_history_enabled_by_default_but_empty(tmp_path):
+    # History is now on by default (dir created on demand), even without a
+    # pre-existing .history — it's just empty until something is recorded.
     manager = AgentManager(_make_test_config_manager(tmp_path))
+    assert manager._history is not None
+    assert (tmp_path / ".history").is_dir()
     assert manager.list_config_history() == []
 
 
-def test_history_lists_recorded_snapshots(tmp_path):
-    (tmp_path / ".history").mkdir()
-    manager = AgentManager(_make_test_config_manager(tmp_path))
-    assert manager._history is not None  # set up because .history exists
+def test_history_lists_recorded_snapshots_with_component_and_label(tmp_path):
+    manager = AgentManager(_make_test_config_manager(tmp_path))  # history auto-created
+    assert manager._history is not None
 
     src = tmp_path / "agents.yaml"
     src.write_text("agents: []\n", encoding="utf-8")
@@ -38,6 +40,8 @@ def test_history_lists_recorded_snapshots(tmp_path):
     history = manager.list_config_history()
     assert len(history) == 1
     assert history[0]["name"].startswith("agents_")
+    assert history[0]["component"] == "agents"
+    assert history[0]["label"] == "agent_crud"
     assert history[0]["modified"]  # ISO timestamp present
 
 
