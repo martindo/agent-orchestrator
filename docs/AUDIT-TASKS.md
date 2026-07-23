@@ -30,7 +30,6 @@ No open task has a hard **logical** prerequisite on another — they are indepen
 | 5.5  | `studio/tests/` (new test) | — | yes |
 | 5.6  | `tests/unit/test_web_search_providers.py` | — | yes |
 | 6.2  | `mcp/client_manager.py` | — | yes |
-| 6.3  | `connectors/executor.py` | — | yes |
 
 **Reading it:** the **ENGINE** group (now 1.3, 3.7, 4.6) all edit `core/engine.py` → do them one-at-a-time or bundled, **not** as parallel branches. (The PROVIDERS group — 4.5's pricing and 6.4's provider usage — is now done.) Everything else is independent — e.g. you could safely run **one ENGINE task + 4.5 + 1.5 + 2.5 + 4.3 + 6.2** as six parallel branches. When adding a new task, give it a *Touches / Group* label so this stays current. (3.4 + 3.5 were the restart-durability bundle — both ENGINE, done together in one PR.)
 
@@ -87,7 +86,7 @@ No open task has a hard **logical** prerequisite on another — they are indepen
 
 - [ ] **6.1 (M)** Studio project state is in-memory/volatile — a single global `current_team` (`studio/routes/team_routes.py`), no project list/multi-project, lost on restart. Persist projects.
 - [ ] **6.2 (M)** MCP client session lifecycle is fragile — `mcp/client_manager._create_session:151-177` manually drives anyio context managers across call frames; may throw "cancel scope in different task" against live servers. Restructure to enter/exit within one task (e.g. an `AsyncExitStack` owned by a single task).
-- [ ] **6.3 (S)** Connector executor retries generic `FAILURE` by default (`executor.py:28`), so non-idempotent writes (create_ticket, send_message) can be retried on ambiguous failures — narrow `retryable_statuses` for write ops.
+- [x] **6.3 (S)** Connector write retries made safe. ✅ 2026-07-22 — for non-idempotent (non-`read_only`) operations the executor now narrows the retryable set to `{UNAVAILABLE}` only: a generic `FAILURE` or `TIMEOUT` may mean the write already (partially) applied, so retrying could duplicate it (create_ticket, send_message). Reads keep the full retry set; unknown/undeclared ops are treated as writes (conservative). 5 tests (+ updated 2 mock-based retry tests to declare their read op). Full suite → 1498 pass.
 - [x] **6.4 (S)** Provider token-usage evened out. ✅ 2026-07-22 — Google (`usage_metadata` → prompt/candidates/total) and Ollama (`prompt_eval_count`/`eval_count`) providers now return a `usage` dict like OpenAI/Anthropic; nothing is fabricated when the API reports none. 4 tests. Unblocks the 4.5 cost-accounting wiring for these providers.
 
 ---
@@ -113,4 +112,5 @@ No open task has a hard **logical** prerequisite on another — they are indepen
 | 2026-07-22 | 4.3 | Branch `feat/webhook-retries`: real retry/backoff + failure reporting + optional HMAC signing in webhook_adapter; PROGRESS line corrected to true. 7 tests. Merged (PR #11). |
 | 2026-07-22 | 4.5 | Branch `feat/real-cost-pricing`: fixed stale model IDs; added per-model input/output pricing + `price_usage()` for real usage; grounded the recommendation estimate. 11 tests. (Wiring into live metrics remains — ENGINE/PHASE group.) Merged (PR #12). |
 | 2026-07-22 | 1.5 | Branch `feat/wire-stub-endpoints`: wired `GET /config/history` to the real `ConfigHistory` via a new `AgentManager.list_config_history()`. 4 tests. (benchmark_routes `return []` lines were functional fallbacks, not stubs — no change.) Merged (PR #13). **Marked revisit** per user. |
-| 2026-07-22 | 6.4 | Branch `feat/provider-usage`: Google + Ollama providers now return a `usage` dict (were dropping the tokens the APIs report). 4 tests. |
+| 2026-07-22 | 6.4 | Branch `feat/provider-usage`: Google + Ollama providers now return a `usage` dict (were dropping the tokens the APIs report). 4 tests. Merged (PR #14). |
+| 2026-07-22 | 6.3 | Branch `feat/connector-retry-safety`: non-idempotent writes no longer retried on ambiguous FAILURE/TIMEOUT (only UNAVAILABLE); reads unchanged. 5 tests + 2 updated. Full suite → 1498 pass. |

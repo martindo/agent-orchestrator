@@ -247,11 +247,17 @@ def test_external_resource_descriptor_model():
 
 def _make_mock_provider(provider_id: str, capability_types: list[CapabilityType], enabled: bool = True):
     mock = MagicMock()
+    cap = capability_types[0] if capability_types else CapabilityType.SEARCH
     mock.get_descriptor.return_value = ConnectorProviderDescriptor(
         provider_id=provider_id,
         display_name=provider_id.capitalize(),
         capability_types=capability_types,
         enabled=enabled,
+        # Declare "query" as a read op so retry-on-FAILURE (idempotent) applies;
+        # writes are no longer retried on ambiguous failures (see audit 6.3).
+        operations=[ConnectorOperationDescriptor(
+            operation="query", description="read", capability_type=cap, read_only=True,
+        )],
     )
     return mock
 

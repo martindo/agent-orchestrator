@@ -70,7 +70,16 @@ class ConnectorExecutor:
         max_retries = retry_policy.max_retries if retry_policy else 0
         delay = retry_policy.delay_seconds if retry_policy else 1.0
         backoff = retry_policy.backoff_multiplier if retry_policy else 2.0
-        retryable = set(retry_policy.retryable_statuses) if retry_policy else _RETRYABLE_STATUSES
+        # Copy so the write-narrowing below never mutates the module-level set.
+        retryable = set(retry_policy.retryable_statuses) if retry_policy else set(_RETRYABLE_STATUSES)
+
+        # Non-idempotent (write) operations must not be retried on ambiguous
+        # outcomes: a generic FAILURE or a TIMEOUT may mean the write already
+        # (partially) applied, so retrying could duplicate it (e.g. create_ticket,
+        # send_message). Restrict writes to UNAVAILABLE, which indicates the
+        # request was rejected before it ran.
+        if not self._operation_is_read_only(provider, request.operation):
+            retryable &= {ConnectorStatus.UNAVAILABLE}
 
         last_result: ConnectorInvocationResult | None = None
         for attempt in range(1, max_retries + 2):  # attempts = max_retries + 1
@@ -91,6 +100,20 @@ class ConnectorExecutor:
             await asyncio.sleep(wait)
 
         return last_result  # type: ignore[return-value]
+
+    @staticmethod
+    def _operation_is_read_only(
+        provider: "ConnectorProviderProtocol", operation: str,
+    ) -> bool:
+        """True if the operation is declared ``read_only`` (idempotent → safe to
+        retry). Unknown operations are treated as writes (conservative)."""
+        try:
+            for op in provider.get_descriptor().operations:
+                if op.operation == operation:
+                    return op.read_only
+        except Exception:
+            logger.debug("Could not resolve read_only for op %r; treating as write", operation)
+        return False
 
     async def _attempt(
         self,
