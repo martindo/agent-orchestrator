@@ -5,7 +5,7 @@ both statically (configuration analysis) and at runtime (signal analysis).
 
 Two main components:
 - GapSignalCollector: subscribes to EventBus events and aggregates
-  failure/confidence/rejection signals into time-windowed counters.
+  failure/confidence/escalation/override signals into time-windowed counters.
 - GapAnalyzer: examines collected signal windows and produces
   CapabilityGap records when thresholds are exceeded.
 """
@@ -38,9 +38,6 @@ class GapSource(str, Enum):
     STATIC_OUTPUT_MISMATCH = "static_output_mismatch"
     RUNTIME_REPEATED_FAILURE = "runtime_repeated_failure"
     RUNTIME_LOW_CONFIDENCE = "runtime_low_confidence"
-    RUNTIME_CRITIC_REJECTION = "runtime_critic_rejection"
-    RUNTIME_GATE_FAILURE = "runtime_gate_failure"
-    RUNTIME_EXCESSIVE_RETRY = "runtime_excessive_retry"
     RUNTIME_HUMAN_OVERRIDE = "runtime_human_override"
     RUNTIME_GOVERNANCE_ESCALATION = "runtime_governance_escalation"
 
@@ -83,10 +80,7 @@ class SignalWindow:
     window_start: datetime
     total_count: int = 0
     failure_count: int = 0
-    retry_count: int = 0
     low_confidence_count: int = 0
-    critic_rejection_count: int = 0
-    gate_failure_count: int = 0
     human_override_count: int = 0
     governance_escalation_count: int = 0
 
@@ -99,8 +93,6 @@ class GapDetectionThresholds:
     failure_rate_warning: float = 0.3
     failure_rate_critical: float = 0.6
     low_confidence_threshold: float = 0.4
-    retry_rate_warning: float = 0.5
-    critic_rejection_rate_warning: float = 0.3
     human_override_rate_warning: float = 0.2
     governance_escalation_rate_warning: float = 0.3
 
@@ -317,8 +309,6 @@ class GapAnalyzer:
 
         gaps.extend(self._check_failure_rate(window, total, run_id))
         gaps.extend(self._check_low_confidence(window, total, run_id))
-        gaps.extend(self._check_retry_rate(window, total, run_id))
-        gaps.extend(self._check_critic_rejection(window, total, run_id))
         gaps.extend(self._check_human_override(window, total, run_id))
         gaps.extend(self._check_governance_escalation(window, total, run_id))
 
@@ -378,47 +368,6 @@ class GapAnalyzer:
                           "low_confidence_count": window.low_confidence_count,
                           "total_count": total},
                 suggestions=["prompt_refinement", "specialized_model", "few_shot_examples"],
-            )]
-        return []
-
-    def _check_retry_rate(
-        self, window: SignalWindow, total: int, run_id: str,
-    ) -> list[CapabilityGap]:
-        """Check excessive retry rate."""
-        rate = window.retry_count / total
-        if rate >= self._thresholds.retry_rate_warning:
-            return [self._make_gap(
-                window, run_id,
-                source=GapSource.RUNTIME_EXCESSIVE_RETRY,
-                severity=GapSeverity.WARNING,
-                description=(
-                    f"Excessive retry rate ({rate:.0%}) for "
-                    f"phase={window.phase_id} agent={window.agent_id}"
-                ),
-                evidence={"retry_rate": rate, "retry_count": window.retry_count,
-                          "total_count": total},
-                suggestions=["prompt_refinement", "output_format_constraint"],
-            )]
-        return []
-
-    def _check_critic_rejection(
-        self, window: SignalWindow, total: int, run_id: str,
-    ) -> list[CapabilityGap]:
-        """Check critic rejection rate."""
-        rate = window.critic_rejection_count / total
-        if rate >= self._thresholds.critic_rejection_rate_warning:
-            return [self._make_gap(
-                window, run_id,
-                source=GapSource.RUNTIME_CRITIC_REJECTION,
-                severity=GapSeverity.WARNING,
-                description=(
-                    f"High critic rejection rate ({rate:.0%}) for "
-                    f"phase={window.phase_id} agent={window.agent_id}"
-                ),
-                evidence={"critic_rejection_rate": rate,
-                          "critic_rejection_count": window.critic_rejection_count,
-                          "total_count": total},
-                suggestions=["quality_criteria_alignment", "output_schema_enforcement"],
             )]
         return []
 

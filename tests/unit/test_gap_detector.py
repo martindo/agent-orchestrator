@@ -132,8 +132,6 @@ class TestGapAnalyzer:
         total: int = 10,
         failures: int = 0,
         low_confidence: int = 0,
-        retries: int = 0,
-        critic_rejections: int = 0,
         human_overrides: int = 0,
         governance_escalations: int = 0,
     ) -> SignalWindow:
@@ -144,8 +142,6 @@ class TestGapAnalyzer:
             total_count=total,
             failure_count=failures,
             low_confidence_count=low_confidence,
-            retry_count=retries,
-            critic_rejection_count=critic_rejections,
             human_override_count=human_overrides,
             governance_escalation_count=governance_escalations,
         )

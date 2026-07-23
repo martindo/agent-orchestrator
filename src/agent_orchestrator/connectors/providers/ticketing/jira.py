@@ -339,6 +339,12 @@ class JiraTicketingProvider(BaseTicketingProvider):
         Raises:
             TicketingProviderError: On HTTP or API errors.
         """
+        # DEPRECATED — audit 4.8 (deferred, do not silently drop): Atlassian has
+        # deprecated GET /rest/api/3/search. Migration is /rest/api/3/search/jql
+        # with token-based pagination (`nextPageToken` instead of
+        # startAt/`total`) and a slightly different response shape. Left as-is
+        # for now because it still works and the new endpoint needs validation
+        # against the live Jira API (no sandbox available here).
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(
