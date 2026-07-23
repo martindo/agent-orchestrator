@@ -358,8 +358,14 @@ class PhaseExecutor:
                     "agent_id": agent_id,
                     "instance_id": instance.instance_id,
                     "work_id": work_item.id,
+                    "phase_id": phase.id,
                     "success": result.success,
                     "duration": result.duration_seconds,
+                    # Enriched so the skill map (audit 3.7) and gap collector can
+                    # learn from real runs: the agent's declared skills and the
+                    # self-reported confidence.
+                    "confidence": extract_confidence(result.output) if result.output else 0.0,
+                    "skills": list(getattr(instance.definition, "skills", []) or []),
                 },
                 source="phase_executor",
             ))
