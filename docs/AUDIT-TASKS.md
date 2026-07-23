@@ -22,7 +22,6 @@ No open task has a hard **logical** prerequisite on another — they are indepen
 | 3.6  | `core/phase_executor.py`, `core/gap_detector.py` | PHASE | yes — distinct from ENGINE |
 | 4.5-wire | `core/phase_executor.py`/`engine.py` + `adapters/metrics_adapter.py` (record real cost) | PHASE/ENGINE | pricing done; only the metrics wiring remains |
 | 6.4  | `adapters/providers/{google,ollama}_provider.py` | PROVIDERS | yes (now the only PROVIDERS task) |
-| 1.5  | `api/routes.py`, `api/benchmark_routes.py` | ROUTES-A | yes |
 | 2.5  | `api/{branching,communication,connector_instances,cost,plugin,scheduler,tenant}_routes.py` | ROUTES-B | yes — distinct route files from ROUTES-A |
 | 2.4  | `studio/routes/settings_routes.py` | — | yes |
 | 6.1  | `studio/routes/team_routes.py` | — | yes |
@@ -44,7 +43,7 @@ No open task has a hard **logical** prerequisite on another — they are indepen
 - [x] **1.2 (S)** Silent mock LLM fallback → now raises. ✅ 2026-07-22 — `LLMAdapter.call` raises `ConfigurationError` when no provider is registered instead of returning a fabricated `confidence:0.5` success. Two tests *did* rely on the old fake behavior (`test_returns_mock_for_unregistered_provider`, `test_work_processing_records_metrics`) — updated them (see test-suite work below). Runtime-verified.
 - [~] **1.3 (S)** Broad exception-swallowing hides init failures. Partial 2026-07-22 — the artifact-store swallow now logs at `error` (was `debug`). **Still to do:** the SLA-monitor / gap / MCP init swallows.
 - [x] **1.4 (S)** Stale "Phase 5 placeholder" comments. ✅ 2026-07-22 — corrected `agent_executor.py` module + `_default_llm_call` docstrings to state the engine injects a real adapter and the stub is a TEST-ONLY fallback.
-- [ ] **1.5 (S)** Dead stub endpoints — `GET /config/history` always returns `[]` (`api/routes.py:1169`) despite `persistence/config_history.py` implementing it; `api/benchmark_routes.py:418,435` return `[]` unconditionally. Wire them to the real stores or 501 honestly.
+- [x] **1.5 (S)** Dead stub endpoint wired. ✅ 2026-07-22 — `GET /config/history` was a hardcoded `return []`; it now reads the real snapshots the `AgentManager` records via `ConfigHistory` (added `AgentManager.list_config_history()`; returns `[]` honestly when no `.history` exists). 4 tests. **Re-verified:** the `benchmark_routes.py` lines the audit flagged (`418/435`) are **not** dead stubs — they're the `engine is None` / `except` fallbacks inside `_collect_completed_items`, which does query `engine.list_work_items()`; no change needed there.
 
 ## Tier 2 — Security floor (nothing is enforced today)
 
@@ -113,4 +112,5 @@ No open task has a hard **logical** prerequisite on another — they are indepen
 | 2026-07-22 | 4.7 | Branch `feat/docs-honesty`: reconciled PROGRESS.md (status header, "Known Issues (none)", stale "1451 tests", webhook "with retries") and studio page count 7→9. Docs-only. Added a concurrency/dependency map. Merged (PR #9). |
 | 2026-07-22 | 3.4 + 3.5 | Branch `feat/restart-durability` (ENGINE-group bundle): engine recovers incomplete work on start (re-enqueue + pipeline-position restore + loop resume) and persists the review queue to JSONL. 3 tests. Full suite → 1467 pass. Merged (PR #10). |
 | 2026-07-22 | 4.3 | Branch `feat/webhook-retries`: real retry/backoff + failure reporting + optional HMAC signing in webhook_adapter; PROGRESS line corrected to true. 7 tests. Merged (PR #11). |
-| 2026-07-22 | 4.5 | Branch `feat/real-cost-pricing`: fixed stale model IDs; added per-model input/output pricing + `price_usage()` for real usage; grounded the recommendation estimate. 11 tests. (Wiring into live metrics remains — ENGINE/PHASE group.) |
+| 2026-07-22 | 4.5 | Branch `feat/real-cost-pricing`: fixed stale model IDs; added per-model input/output pricing + `price_usage()` for real usage; grounded the recommendation estimate. 11 tests. (Wiring into live metrics remains — ENGINE/PHASE group.) Merged (PR #12). |
+| 2026-07-22 | 1.5 | Branch `feat/wire-stub-endpoints`: wired `GET /config/history` to the real `ConfigHistory` via a new `AgentManager.list_config_history()`. 4 tests. (benchmark_routes `return []` lines were functional fallbacks, not stubs — no change.) |

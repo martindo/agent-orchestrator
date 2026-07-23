@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +86,26 @@ class AgentManager:
             logger.warning(
                 "Configuration not loaded; AgentManager starting empty",
             )
+
+    def list_config_history(self, stem_filter: str | None = None) -> list[dict[str, str]]:
+        """List recorded configuration snapshots, newest first.
+
+        Returns an empty list when history is unavailable (no ``.history``
+        directory in the workspace). Each entry has the snapshot ``name`` and
+        its ``modified`` timestamp (ISO-8601 UTC).
+        """
+        if self._history is None:
+            return []
+        entries: list[dict[str, str]] = []
+        for path in self._history.list_versions(stem_filter):
+            try:
+                modified = datetime.fromtimestamp(
+                    path.stat().st_mtime, tz=timezone.utc,
+                ).isoformat()
+            except OSError:
+                modified = ""
+            entries.append({"name": path.name, "modified": modified})
+        return entries
 
     def list_agents(self) -> list[AgentDefinition]:
         """List all agent definitions in the active profile.
