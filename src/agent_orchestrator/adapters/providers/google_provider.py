@@ -57,17 +57,25 @@ class GoogleProvider:
             max_output_tokens=kwargs.get("max_tokens", 4000),
         )
 
-        def _sync_call() -> str:
+        def _sync_call() -> Any:
             gen_model = genai.GenerativeModel(
                 model_name=model,
                 system_instruction=system_text or None,
                 generation_config=gen_config,
             )
-            response = gen_model.generate_content(contents)
-            return response.text
+            return gen_model.generate_content(contents)
 
-        text = await asyncio.to_thread(_sync_call)
-        return {
-            "response": text,
+        response = await asyncio.to_thread(_sync_call)
+        result: dict[str, Any] = {
+            "response": response.text,
             "model": model,
         }
+        # Surface token usage so cost/metrics can price it (was discarded).
+        usage = getattr(response, "usage_metadata", None)
+        if usage is not None:
+            result["usage"] = {
+                "prompt_tokens": getattr(usage, "prompt_token_count", 0) or 0,
+                "completion_tokens": getattr(usage, "candidates_token_count", 0) or 0,
+                "total_tokens": getattr(usage, "total_token_count", 0) or 0,
+            }
+        return result

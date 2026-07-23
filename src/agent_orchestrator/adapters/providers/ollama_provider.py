@@ -59,7 +59,16 @@ class OllamaProvider:
         response.raise_for_status()
         data = response.json()
         content = data.get("message", {}).get("content", "")
+        # Surface token usage (Ollama reports prompt_eval_count / eval_count)
+        # so cost/metrics can price it (was discarded).
+        prompt_tokens = data.get("prompt_eval_count", 0) or 0
+        completion_tokens = data.get("eval_count", 0) or 0
         return {
             "response": content,
             "model": model,
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
         }
