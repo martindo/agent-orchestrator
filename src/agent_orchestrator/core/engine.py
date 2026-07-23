@@ -315,6 +315,10 @@ class OrchestrationEngine:
         self._review_queue = ReviewQueue(persistence_path=state_dir / "reviews.jsonl")
         self._audit_logger = AuditLogger(state_dir / "audit")
         self._metrics = MetricsCollector(state_dir / "metrics.jsonl")
+        # Record real LLM cost/tokens from each agent run (audit 4.5): providers
+        # return usage, cost_optimizer prices it — but nothing recorded it.
+        self._event_bus.subscribe(EventType.AGENT_COMPLETED, self._record_execution_cost)
+        self._event_bus.subscribe(EventType.AGENT_ERROR, self._record_execution_cost)
 
         # Work item persistence — dispatched by the persistence_backend setting
         # (file / sqlite / postgresql). File is the default.
@@ -1272,6 +1276,31 @@ class OrchestrationEngine:
                 exc_info=True,
             )
             self._skill_map = None
+
+    async def _record_execution_cost(self, event: Event) -> None:
+        """Price an agent execution's token usage and record it to metrics (4.5).
+
+        Reads the enriched AGENT_COMPLETED/AGENT_ERROR event's ``usage``/``model``,
+        prices it via cost_optimizer.price_usage, and records ``llm.tokens`` and
+        ``llm.cost`` so metrics.total_tokens / total_cost reflect reality.
+        """
+        if self._metrics is None:
+            return
+        data = event.data
+        usage = data.get("usage") or {}
+        model = data.get("model") or ""
+        prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+        total = prompt_tokens + completion_tokens
+        if total <= 0:
+            return
+
+        from agent_orchestrator.core.cost_optimizer import price_usage
+        cost = price_usage(model, prompt_tokens, completion_tokens)
+        tags = {"model": model, "agent_id": data.get("agent_id", "")}
+        self._metrics.record("llm.tokens", float(total), tags=tags)
+        if cost > 0:
+            self._metrics.record("llm.cost", cost, tags=tags)
 
     async def _record_skill_executions(self, event: Event) -> None:
         """Record an agent execution against each of its skills (audit 3.7).

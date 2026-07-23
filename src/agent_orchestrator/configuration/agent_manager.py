@@ -74,10 +74,14 @@ class AgentManager:
             with self._lock:
                 self._agents = {a.id: a for a in profile.agents}
 
-            # Set up config history if workspace has .history dir
-            history_dir = self._config.workspace_dir / ".history"
-            if history_dir.is_dir():
-                self._history = ConfigHistory(history_dir)
+            # Config history is on by default (the .history dir is created on
+            # demand) rather than a fragile opt-in that only worked when the dir
+            # already existed (audit 1.5 revisit).
+            try:
+                self._history = ConfigHistory(self._config.workspace_dir / ".history")
+            except Exception as exc:  # noqa: BLE001 — history is best-effort
+                logger.warning("Config history unavailable: %s", exc)
+                self._history = None
 
             logger.info(
                 "AgentManager initialized with %d agents", len(self._agents),
@@ -104,7 +108,14 @@ class AgentManager:
                 ).isoformat()
             except OSError:
                 modified = ""
-            entries.append({"name": path.name, "modified": modified})
+            # Snapshot filenames are "{component}_{date}_{time}[_{label}]{suffix}".
+            parts = path.stem.split("_")
+            entries.append({
+                "name": path.name,
+                "component": parts[0] if parts else "",
+                "label": "_".join(parts[3:]) if len(parts) > 3 else "",
+                "modified": modified,
+            })
         return entries
 
     def list_agents(self) -> list[AgentDefinition]:
