@@ -33,6 +33,108 @@ from agent_orchestrator.mcp.models import (
 logger = logging.getLogger(__name__)
 
 
+class _MCPSessionHandle:
+    """Owns a single MCP session's full lifecycle within ONE asyncio task.
+
+    The MCP transports and ``ClientSession`` are anyio context managers whose
+    cancel scopes are bound to the task that enters them. The old code entered
+    them in ``connect``'s task and exited them in ``disconnect``'s (possibly
+    different) task, which raised "Attempted to exit cancel scope in a different
+    task than it was entered in" against live servers. Here a dedicated task
+    enters → keeps alive → exits everything via an ``AsyncExitStack``; callers
+    use ``.session`` to issue requests from their own tasks (safe — only
+    enter/exit are task-bound).
+    """
+
+    def __init__(self, config: MCPServerConfig) -> None:
+        self._config = config
+        self.session: Any = None
+        self._ready = asyncio.Event()
+        self._shutdown = asyncio.Event()
+        self._task: "asyncio.Task[None] | None" = None
+        self._error: Exception | None = None
+
+    async def open(self) -> Any:
+        """Start the session task and return the live session (or raise)."""
+        self._task = asyncio.create_task(
+            self._run(), name=f"mcp-session-{self._config.server_id}",
+        )
+        await self._ready.wait()
+        if self._error is not None:
+            await self._join()
+            raise self._error
+        return self.session
+
+    async def close(self) -> None:
+        """Signal shutdown; the owning task exits the session cleanly."""
+        self._shutdown.set()
+        await self._join()
+
+    async def _join(self) -> None:
+        task, self._task = self._task, None
+        if task is not None:
+            try:
+                await task
+            except Exception:
+                logger.debug(
+                    "MCP session task for '%s' ended with error",
+                    self._config.server_id, exc_info=True,
+                )
+
+    async def _run(self) -> None:
+        from contextlib import AsyncExitStack
+        try:
+            async with AsyncExitStack() as stack:
+                self.session = await self._enter_session(stack)
+                self._ready.set()
+                await self._shutdown.wait()
+            # AsyncExitStack unwinds here, in THIS task — no cross-task exit.
+        except Exception as exc:  # surfaced to open()
+            self._error = exc
+            self._ready.set()
+
+    async def _enter_session(self, stack: Any) -> Any:
+        from mcp import ClientSession
+        from mcp.client.stdio import stdio_client, StdioServerParameters
+        from mcp.client.streamable_http import streamablehttp_client
+
+        config = self._config
+        if config.transport == MCPTransportType.STDIO:
+            if config.command is None:
+                raise MCPConfigurationError(
+                    f"stdio transport requires 'command' for server '{config.server_id}'"
+                )
+            server_params = StdioServerParameters(
+                command=config.command,
+                args=config.args,
+                env=_resolve_env_vars(config.env) or None,
+            )
+            read_stream, write_stream = await stack.enter_async_context(
+                stdio_client(server_params)
+            )
+        elif config.transport in (MCPTransportType.STREAMABLE_HTTP, MCPTransportType.SSE):
+            if config.url is None:
+                raise MCPConfigurationError(
+                    f"HTTP transport requires 'url' for server '{config.server_id}'"
+                )
+            headers = dict(config.headers)
+            if config.credential_env_var:
+                token = os.environ.get(config.credential_env_var, "")
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+            read_stream, write_stream, *_ = await stack.enter_async_context(
+                streamablehttp_client(url=config.url, headers=headers)
+            )
+        else:
+            raise MCPConfigurationError(f"Unsupported transport type: {config.transport}")
+
+        session = await stack.enter_async_context(
+            ClientSession(read_stream, write_stream)
+        )
+        await session.initialize()
+        return session
+
+
 def _check_mcp_sdk() -> None:
     """Raise MCPConfigurationError if the mcp SDK is not installed."""
     try:
@@ -76,7 +178,7 @@ class MCPClientManager:
             s.server_id: s for s in config.servers if s.enabled
         }
         self._sessions: dict[str, Any] = {}  # server_id -> mcp ClientSession
-        self._transports: dict[str, Any] = {}  # server_id -> transport context managers
+        self._handles: dict[str, _MCPSessionHandle] = {}  # server_id -> lifecycle owner
         self._session_info: dict[str, MCPSessionInfo] = {}
         self._lock = asyncio.Lock()
 
@@ -114,70 +216,23 @@ class MCPClientManager:
                 logger.debug("Already connected to MCP server '%s'", server_id)
                 return
 
+        handle = _MCPSessionHandle(server_config)
         try:
-            session, transport_ctx = await self._create_session(server_config)
-            async with self._lock:
-                self._sessions[server_id] = session
-                self._transports[server_id] = transport_ctx
-                self._session_info[server_id] = MCPSessionInfo(
-                    server_id=server_id,
-                    connected=True,
-                )
-            logger.info("Connected to MCP server '%s' (%s)", server_id, server_config.display_name)
+            session = await handle.open()
         except MCPConfigurationError:
             raise
         except Exception as exc:
             msg = f"Failed to connect to MCP server '{server_id}': {exc}"
             raise MCPConnectionError(msg) from exc
 
-    async def _create_session(self, config: MCPServerConfig) -> tuple[Any, Any]:
-        """Create an MCP client session based on transport type."""
-        from mcp import ClientSession
-        from mcp.client.stdio import stdio_client, StdioServerParameters
-        from mcp.client.streamable_http import streamablehttp_client
-
-        if config.transport == MCPTransportType.STDIO:
-            if config.command is None:
-                msg = f"stdio transport requires 'command' for server '{config.server_id}'"
-                raise MCPConfigurationError(msg)
-
-            env = _resolve_env_vars(config.env)
-            server_params = StdioServerParameters(
-                command=config.command,
-                args=config.args,
-                env=env or None,
+        async with self._lock:
+            self._sessions[server_id] = session
+            self._handles[server_id] = handle
+            self._session_info[server_id] = MCPSessionInfo(
+                server_id=server_id,
+                connected=True,
             )
-
-            # stdio_client returns an async context manager yielding (read, write)
-            transport_ctx = stdio_client(server_params)
-            streams = await transport_ctx.__aenter__()
-            read_stream, write_stream = streams
-            session = ClientSession(read_stream, write_stream)
-            await session.__aenter__()
-            await session.initialize()
-            return session, transport_ctx
-
-        if config.transport in (MCPTransportType.STREAMABLE_HTTP, MCPTransportType.SSE):
-            if config.url is None:
-                msg = f"HTTP transport requires 'url' for server '{config.server_id}'"
-                raise MCPConfigurationError(msg)
-
-            headers = dict(config.headers)
-            if config.credential_env_var:
-                token = os.environ.get(config.credential_env_var, "")
-                if token:
-                    headers["Authorization"] = f"Bearer {token}"
-
-            transport_ctx = streamablehttp_client(url=config.url, headers=headers)
-            streams = await transport_ctx.__aenter__()
-            read_stream, write_stream, _ = streams
-            session = ClientSession(read_stream, write_stream)
-            await session.__aenter__()
-            await session.initialize()
-            return session, transport_ctx
-
-        msg = f"Unsupported transport type: {config.transport}"
-        raise MCPConfigurationError(msg)
+        logger.info("Connected to MCP server '%s' (%s)", server_id, server_config.display_name)
 
     async def connect_all(self) -> dict[str, bool]:
         """Connect to all configured servers with auto_connect=True.
@@ -205,21 +260,15 @@ class MCPClientManager:
             server_id: ID of the server to disconnect from.
         """
         async with self._lock:
-            session = self._sessions.pop(server_id, None)
-            transport_ctx = self._transports.pop(server_id, None)
+            self._sessions.pop(server_id, None)
+            handle = self._handles.pop(server_id, None)
             self._session_info.pop(server_id, None)
 
-        if session is not None:
+        if handle is not None:
             try:
-                await session.__aexit__(None, None, None)
+                await handle.close()
             except Exception:
                 logger.debug("Error closing MCP session for '%s'", server_id, exc_info=True)
-
-        if transport_ctx is not None:
-            try:
-                await transport_ctx.__aexit__(None, None, None)
-            except Exception:
-                logger.debug("Error closing transport for '%s'", server_id, exc_info=True)
 
         logger.info("Disconnected from MCP server '%s'", server_id)
 

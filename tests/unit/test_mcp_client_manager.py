@@ -131,11 +131,11 @@ class TestMCPClientManagerDisconnect:
     @pytest.mark.asyncio
     async def test_disconnect_cleans_state(self) -> None:
         mgr = MCPClientManager(_make_config(_stdio_server()))
-        # Simulate a connected session
+        # Simulate a connected session: a live session + its lifecycle handle.
         mock_session = AsyncMock()
-        mock_transport = AsyncMock()
+        mock_handle = AsyncMock()  # provides an awaitable .close()
         mgr._sessions["test"] = mock_session
-        mgr._transports["test"] = mock_transport
+        mgr._handles["test"] = mock_handle
 
         from agent_orchestrator.mcp.models import MCPSessionInfo
         mgr._session_info["test"] = MCPSessionInfo(server_id="test", connected=True)
@@ -143,7 +143,9 @@ class TestMCPClientManagerDisconnect:
         await mgr.disconnect("test")
 
         assert "test" not in mgr._sessions
-        assert "test" not in mgr._transports
+        assert "test" not in mgr._handles
+        # Disconnect delegates cleanup to the handle (single-task exit).
+        mock_handle.close.assert_awaited_once()
         assert "test" not in mgr._session_info
 
 
