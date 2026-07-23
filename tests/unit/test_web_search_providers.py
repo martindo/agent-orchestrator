@@ -735,3 +735,56 @@ def test_providers_package_exports() -> None:
     assert TavilySearchProvider is not None
     assert SerpAPISearchProvider is not None
     assert BraveSearchProvider is not None
+
+
+# ---------------------------------------------------------------------------
+# Request correctness (audit 5.6): assert each provider hits the right
+# endpoint with the right auth + query — a wrong URL/auth would otherwise pass.
+# ---------------------------------------------------------------------------
+
+
+async def test_tavily_request_targets_correct_endpoint_and_auth(tavily_provider):
+    mock_client = _make_mock_http_client(post_response=_make_search_response({"results": []}))
+    with patch(
+        "agent_orchestrator.connectors.providers.web_search.tavily.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        await tavily_provider.execute(_make_search_request("unique-query-xyz", limit=5))
+
+    mock_client.post.assert_awaited_once()
+    call = mock_client.post.call_args
+    assert call.args[0] == "https://api.tavily.com/search"
+    assert call.kwargs["json"]["api_key"] == "test-tavily-key"
+    assert call.kwargs["json"]["query"] == "unique-query-xyz"
+    assert call.kwargs["json"]["max_results"] == 5
+
+
+async def test_serpapi_request_targets_correct_endpoint_and_auth(serpapi_provider):
+    mock_client = _make_mock_http_client(get_response=_make_search_response({"organic_results": []}))
+    with patch(
+        "agent_orchestrator.connectors.providers.web_search.serpapi.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        await serpapi_provider.execute(_make_search_request("unique-query-xyz", limit=5))
+
+    mock_client.get.assert_awaited_once()
+    call = mock_client.get.call_args
+    assert call.args[0] == "https://serpapi.com/search"
+    assert call.kwargs["params"]["api_key"] == "test-serpapi-key"
+    assert call.kwargs["params"]["q"] == "unique-query-xyz"
+
+
+async def test_brave_request_targets_correct_endpoint_and_auth(brave_provider):
+    mock_client = _make_mock_http_client(get_response=_make_search_response({"web": {"results": []}}))
+    with patch(
+        "agent_orchestrator.connectors.providers.web_search.brave.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        await brave_provider.execute(_make_search_request("unique-query-xyz", limit=5))
+
+    mock_client.get.assert_awaited_once()
+    call = mock_client.get.call_args
+    assert call.args[0] == "https://api.search.brave.com/res/v1/web/search"
+    # Brave authenticates via header, not query param.
+    assert call.kwargs["headers"]["X-Subscription-Token"] == "test-brave-key"
+    assert call.kwargs["params"]["q"] == "unique-query-xyz"

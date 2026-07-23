@@ -24,9 +24,7 @@ No open task has a hard **logical** prerequisite on another — they are indepen
 | 2.5  | `api/{branching,communication,connector_instances,cost,plugin,scheduler,tenant}_routes.py` | ROUTES-B | yes — distinct route files from ROUTES-A |
 | 6.1  | `studio/routes/team_routes.py` | — | yes |
 | 4.8  | connectors `slack.py`, `jira.py` | — | yes |
-| 5.4  | `tests/unit/test_core.py` | — | yes |
 | 5.5  | `studio/tests/` (new test) | — | yes |
-| 5.6  | `tests/unit/test_web_search_providers.py` | — | yes |
 | 6.2  | `mcp/client_manager.py` | — | yes |
 
 **Reading it:** the **ENGINE** group (now 1.3, 3.7, 4.6) all edit `core/engine.py` → do them one-at-a-time or bundled, **not** as parallel branches. (The PROVIDERS group — 4.5's pricing and 6.4's provider usage — is now done.) Everything else is independent — e.g. you could safely run **one ENGINE task + 4.5 + 1.5 + 2.5 + 4.3 + 6.2** as six parallel branches. When adding a new task, give it a *Touches / Group* label so this stays current. (3.4 + 3.5 were the restart-durability bundle — both ENGINE, done together in one PR.)
@@ -76,9 +74,9 @@ No open task has a hard **logical** prerequisite on another — they are indepen
 - [x] **5.7 (S)** Stale/flaky tests fixed to restore a real green baseline. ✅ 2026-07-22 — updated the 14 stale connector/MCP descriptor assertions to the current provider surface; made `test_expired_session_evicted` deterministic (it backdates `last_activity` instead of relying on `sleep(0.01)` crossing a strict `elapsed > ttl` on a coarse clock); reworked `test_skips_provider_on_import_error` to fail only the target import instead of globally patching `importlib.import_module` (which broke unittest.mock's own target resolution). Suite: 1357 passing, 0 failing.
 - [x] **5.2 (S)** **`node_modules` untracked.** ✅ 2026-07-22 — `git rm -r --cached` removed all 4,613 `studio/frontend/node_modules/` files from the index (files kept on disk); added `node_modules/` + Vite/npm log patterns to `.gitignore`. CI already proves the clean path (`npm ci` from the lockfile) builds. (The 4 tracked `workspace/profiles/research-team/*.yaml` are intentional sample profiles, not runtime cruft — runtime state like `.state`/`settings.yaml` was already ignored in an earlier commit — so they were left tracked.)
 - [x] **5.3 (S)** Cross-project cruft removed. ✅ 2026-07-22 — deleted `_setup_packages.py` (injected a sibling `../coderswarm-packages` onto `sys.path`) and its side-effect import + `sys.path` hack in `__main__.py`; fixed the "coderswarm-packages"/"coderswarm-v2" docstrings in `adapters/__init__.py` and `persistence/settings_store.py`. Added an entry-point import test. Full suite → 1499 pass.
-- [ ] **5.4 (M)** Core-execution unit tests assert the **stub** — `test_core.py:445` runs `AgentExecutor` with no `llm_call_fn` and asserts `confidence == 0.85` (the mock's value). The real `LLMAdapter` execution path (with a mocked provider SDK) is under-tested end-to-end. Add tests that exercise the adapter path.
+- [x] **5.4 (M)** Real adapter path now tested end-to-end. ✅ 2026-07-22 — added `test_executor_adapter_path.py`: `AgentExecutor(llm_call_fn=LLMAdapter.call)` routing to a mocked provider SDK, asserting the provider receives the right model/messages/params, the real response (incl. `usage`) flows through, confidence is parsed from it (3.1), and an unregistered provider fails loudly (no stub). Complements the existing stub test. 3 tests.
 - [ ] **5.5 (S)** No end-to-end generator→loader test (Studio) — generation tests stop at YAML parseability; add a test that loads Studio-generated YAML through the runtime's `configuration/loader.py` + `ProfileConfig` to prove compatibility.
-- [ ] **5.6 (S)** Web-search provider tests don't assert request correctness (no `call_args`/`assert_called` — `test_web_search_providers.py`), so a wrong endpoint/auth would pass. Other categories check sparsely; strengthen.
+- [x] **5.6 (S)** Web-search request correctness now asserted. ✅ 2026-07-22 — added tests that check each provider hits the right endpoint with the right auth + query via `call_args`: Tavily (`api.tavily.com/search`, `api_key` in body), SerpAPI (`serpapi.com/search`, `api_key`+`q` params), Brave (`api.search.brave.com/...`, `X-Subscription-Token` header). A wrong URL/auth would now fail. 3 tests.
 
 ## Tier 6 — Robustness / follow-ups
 
@@ -113,4 +111,5 @@ No open task has a hard **logical** prerequisite on another — they are indepen
 | 2026-07-22 | 6.4 | Branch `feat/provider-usage`: Google + Ollama providers now return a `usage` dict (were dropping the tokens the APIs report). 4 tests. Merged (PR #14). |
 | 2026-07-22 | 6.3 | Branch `feat/connector-retry-safety`: non-idempotent writes no longer retried on ambiguous FAILURE/TIMEOUT (only UNAVAILABLE); reads unchanged. 5 tests + 2 updated. Full suite → 1498 pass. Merged (PR #15). |
 | 2026-07-22 | 2.4 | Branch `feat/studio-key-safety`: Studio strips env-sourced API keys on save + refills from env on load (aligns with runtime). 3 studio tests → studio suite 98 pass. Merged (PR #16). |
-| 2026-07-22 | 5.3 | Branch `feat/remove-cross-project-cruft`: deleted `_setup_packages.py` + its `__main__` hack; fixed coderswarm docstrings. 1 test. Full suite → 1499 pass. |
+| 2026-07-22 | 5.3 | Branch `feat/remove-cross-project-cruft`: deleted `_setup_packages.py` + its `__main__` hack; fixed coderswarm docstrings. 1 test. Full suite → 1499 pass. Merged (PR #17). |
+| 2026-07-22 | 5.4 + 5.6 | Branch `feat/strengthen-tests`: added real-adapter-path executor tests (5.4) and web-search request-correctness tests (5.6). 6 tests. Full suite → 1505 pass. |
