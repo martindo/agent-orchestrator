@@ -1167,9 +1167,17 @@ async def validate_config(request: Request) -> ConfigValidationResponse:
 
 
 @config_router.get("/config/history")
-async def get_config_history() -> list[dict[str, str]]:
-    """Get configuration change history."""
-    return []
+async def get_config_history(request: Request) -> list[dict[str, str]]:
+    """Get configuration change history.
+
+    Reads the real config-history snapshots recorded by the AgentManager
+    (was a dead stub that always returned []). Returns [] when no
+    AgentManager / history is available.
+    """
+    agent_manager = getattr(request.app.state, "agent_manager", None)
+    if agent_manager is None or not hasattr(agent_manager, "list_config_history"):
+        return []
+    return agent_manager.list_config_history()
 
 
 _AVAILABLE_PROVIDERS = ["anthropic", "openai", "google", "grok", "ollama"]
