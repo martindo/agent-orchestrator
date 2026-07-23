@@ -1,4 +1,4 @@
-"""Adapters — bridges to coderswarm-packages."""
+"""Adapters — LLM providers, metrics, and webhook bridges."""
 
 from agent_orchestrator.adapters.llm_adapter import LLMAdapter, LLMProviderProtocol
 from agent_orchestrator.adapters.metrics_adapter import MetricsCollector
